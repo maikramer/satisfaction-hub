@@ -1,0 +1,850 @@
+#include "ui_driver.hpp"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "lvgl.h"
+#include "display_driver.hpp"
+
+// Mutex externo do display_driver
+extern SemaphoreHandle_t lvgl_mutex;
+extern TaskHandle_t lvgl_task_handle;
+
+extern "C" {
+}
+
+#if LV_USE_IMGFONT
+// Declarar tipos e funções do imgfont manualmente já que o include pode não funcionar
+extern "C" {
+typedef const void * (*lv_imgfont_get_path_cb_t)(const lv_font_t * font,
+                                                 uint32_t unicode, uint32_t unicode_next,
+                                                 int32_t * offset_y, void * user_data);
+lv_font_t * lv_imgfont_create(uint16_t height, lv_imgfont_get_path_cb_t path_cb, void * user_data);
+void lv_imgfont_destroy(lv_font_t * font);
+}
+#endif
+
+
+namespace {
+constexpr char TAG[] = "UI";
+
+// Flags de inversão de touch - devem corresponder aos valores em display_driver.cpp
+// IMPORTANTE: Se mudar aqui, também mudar em display_driver.cpp
+constexpr bool TOUCH_INVERT_X = true;    // X precisa ser invertido
+constexpr bool TOUCH_INVERT_Y = true;   // Touch está invertido em Y - valores maiores = topo
+
+// Estados da aplicação
+enum class AppState {
+    CALIBRATION,   // Tela de calibração inicial
+    QUESTION,      // Mostrando pergunta de satisfação
+    THANK_YOU,     // Mostrando agradecimento
+    CONFIGURATION, // Tela de configurações
+};
+
+AppState current_state = AppState::CALIBRATION;
+int selected_rating = 0;  // 0 = nenhuma, 1-5 = avaliação selecionada
+bool pending_screen_transition = false;  // Flag para transição assíncrona de tela
+uint32_t transition_delay_counter = 0;  // Contador para delay antes da transição
+
+// Objetos LVGL
+lv_obj_t *question_screen = nullptr;
+lv_obj_t *thank_you_screen = nullptr;
+lv_obj_t *configuration_screen = nullptr;
+lv_obj_t *rating_buttons[5] = {nullptr};
+lv_obj_t *question_label = nullptr;
+lv_obj_t *thank_you_label = nullptr;
+lv_obj_t *thank_you_summary = nullptr;
+lv_obj_t *restart_button = nullptr;
+lv_obj_t *settings_button = nullptr;  // Botão de configurações na tela principal
+lv_obj_t *config_calibrate_button = nullptr;  // Botão de calibração na tela de configurações
+
+lv_display_t *display_handle = nullptr;
+
+// Declarações forward
+void start_calibration();
+void show_question_screen();
+void show_thank_you_screen();
+void show_configuration_screen();
+void create_configuration_screen();
+
+// Função helper para criar cores
+static lv_color_t make_color(uint32_t hex) {
+    return lv_color_hex(hex);
+}
+
+// Cores para os botões de avaliação
+static const lv_color_t RATING_COLORS[] = {
+    make_color(0xFF0000),  // Vermelho (1 - Muito Insatisfeito)
+    make_color(0xFF6600),  // Laranja (2 - Insatisfeito)
+    make_color(0xFFCC00),  // Amarelo (3 - Neutro)
+    make_color(0x99FF00),  // Verde claro (4 - Satisfeito)
+    make_color(0x00FF00),  // Verde (5 - Muito Satisfeito)
+};
+
+// Números grandes para os botões (1 a 5)
+constexpr const char *RATING_NUMBERS[] = {
+    "1",  // Muito insatisfeito
+    "2",  // Insatisfeito
+    "3",  // Neutro
+    "4",  // Satisfeito
+    "5",  // Muito satisfeito
+};
+
+struct CalibrationTarget {
+    const char *instruction;
+    lv_point_t position;
+};
+
+static const CalibrationTarget CALIBRATION_POINTS[] = {
+    {"Toque no canto superior esquerdo", {30, 30}},
+    {"Toque no canto superior direito", {290, 30}},
+    {"Toque no canto inferior esquerdo", {30, 210}},
+    {"Toque no canto inferior direito", {290, 210}},
+    {"Toque no centro", {160, 120}},
+};
+
+static constexpr int CALIBRATION_POINT_COUNT = sizeof(CALIBRATION_POINTS) / sizeof(CALIBRATION_POINTS[0]);
+static constexpr int CAL_TL = 0;
+static constexpr int CAL_TR = 1;
+static constexpr int CAL_BL = 2;
+static constexpr int CAL_BR = 3;
+static constexpr int CAL_CENTER = 4;
+static constexpr int CAL_TARGET_SIZE = 28;
+static constexpr uint16_t CAL_MIN_PRESSURE = 150;
+static TouchPoint calibration_samples[CALIBRATION_POINT_COUNT];
+static int current_calibration_index = 0;
+static lv_obj_t *calibration_screen = nullptr;
+static lv_obj_t *calibration_label = nullptr;
+static lv_obj_t *calibration_target = nullptr;
+static bool calibration_point_captured = false;
+static AppState state_before_calibration = AppState::QUESTION;  // Estado antes de iniciar calibração
+
+constexpr const char *RATING_MESSAGES[] = {
+    "muito insatisfeito",
+    "insatisfeito",
+    "neutro",
+    "satisfeito",
+    "muito satisfeito"
+};
+
+// Fontes principais (usar variações ativas do Montserrat)
+static const lv_font_t *TITLE_FONT = &lv_font_montserrat_20;
+static const lv_font_t *TEXT_FONT = &lv_font_montserrat_16;
+static const lv_font_t *CAPTION_FONT = &lv_font_montserrat_14;
+
+// Fontes maiores para botões (definidas nas linhas abaixo)
+
+// Helper para lock/unlock LVGL
+static void lvgl_lock() {
+    if (lvgl_mutex != nullptr) {
+        if (xTaskGetCurrentTaskHandle() == lvgl_task_handle) {
+            return; // Já estamos no task do LVGL, não precisa lock
+        }
+        xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
+    }
+}
+
+static void lvgl_unlock() {
+    if (lvgl_mutex != nullptr) {
+        if (xTaskGetCurrentTaskHandle() == lvgl_task_handle) {
+            return; // Task do LVGL não adquiriu lock, nada a fazer
+        }
+        xSemaphoreGive(lvgl_mutex);
+    }
+}
+
+// Callback para botão de avaliação
+static void rating_button_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    ESP_LOGI(TAG, "rating_button_cb: evento=%d, estado=%d", code, static_cast<int>(current_state));
+    
+    // Processar apenas eventos de clique
+    if (code == LV_EVENT_CLICKED && current_state == AppState::QUESTION) {
+        // Obter o índice do botão (1-5)
+        int rating = reinterpret_cast<intptr_t>(lv_event_get_user_data(e));
+        selected_rating = rating;
+        
+        ESP_LOGI(TAG, "Avaliação selecionada: %d", rating);
+        
+        // Marcar transição pendente (será processada no update() para evitar problemas de contexto)
+        pending_screen_transition = true;
+        transition_delay_counter = 0;  // Resetar contador de delay
+    }
+}
+
+// Callback para botão de reiniciar
+static void restart_button_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_CLICKED && current_state == AppState::THANK_YOU) {
+        ESP_LOGI(TAG, "Reiniciando pesquisa...");
+        show_question_screen();
+    }
+}
+
+// Callback para botão de configurações
+static void settings_button_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        ESP_LOGI(TAG, "Abrindo tela de configurações...");
+        show_configuration_screen();
+    }
+}
+
+// Callback para botão de calibração na tela de configurações
+static void config_calibrate_button_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        ESP_LOGI(TAG, "Iniciando calibração da tela de configurações...");
+        start_calibration();
+    }
+}
+
+// Callback para botão de voltar na tela de configurações
+static void config_back_button_cb(lv_event_t *e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        ESP_LOGI(TAG, "Voltando para tela principal...");
+        show_question_screen();
+    }
+}
+
+static void update_calibration_ui() {
+    if (calibration_label == nullptr || calibration_target == nullptr) {
+        return;
+    }
+    if (current_calibration_index >= CALIBRATION_POINT_COUNT) {
+        return;
+    }
+    const CalibrationTarget &target = CALIBRATION_POINTS[current_calibration_index];
+    lv_label_set_text_fmt(calibration_label, "Passo %d/%d\n%s",
+                          current_calibration_index + 1, CALIBRATION_POINT_COUNT,
+                          target.instruction);
+    lv_obj_set_pos(calibration_target,
+                   target.position.x - CAL_TARGET_SIZE / 2,
+                   target.position.y - CAL_TARGET_SIZE / 2);
+}
+
+static void finish_calibration() {
+    calibration_point_captured = false;
+
+    auto avg = [](uint16_t a, uint16_t b) -> uint32_t {
+        return (static_cast<uint32_t>(a) + static_cast<uint32_t>(b)) / 2;
+    };
+
+    // Log detalhado dos valores RAW capturados
+    ESP_LOGI(TAG, "=== VALORES RAW CAPTURADOS ===");
+    ESP_LOGI(TAG, "TL: rawX=%u rawY=%u", calibration_samples[CAL_TL].rawX, calibration_samples[CAL_TL].rawY);
+    ESP_LOGI(TAG, "TR: rawX=%u rawY=%u", calibration_samples[CAL_TR].rawX, calibration_samples[CAL_TR].rawY);
+    ESP_LOGI(TAG, "BR: rawX=%u rawY=%u", calibration_samples[CAL_BR].rawX, calibration_samples[CAL_BR].rawY);
+    ESP_LOGI(TAG, "BL: rawX=%u rawY=%u", calibration_samples[CAL_BL].rawX, calibration_samples[CAL_BL].rawY);
+    ESP_LOGI(TAG, "CENTER: rawX=%u rawY=%u", calibration_samples[CAL_CENTER].rawX, calibration_samples[CAL_CENTER].rawY);
+
+    TouchCalibration new_cal = {};
+    
+    // Obter as posições reais dos pontos de calibração (não os cantos absolutos)
+    const int screen_w = 320;
+    const int screen_h = 240;
+    
+    // Posições reais dos pontos de calibração (centro do alvo)
+    const int cal_tl_x = CALIBRATION_POINTS[CAL_TL].position.x;  // 30
+    const int cal_tl_y = CALIBRATION_POINTS[CAL_TL].position.y;  // 30
+    const int cal_tr_x = CALIBRATION_POINTS[CAL_TR].position.x;  // 290
+    const int cal_tr_y = CALIBRATION_POINTS[CAL_TR].position.y;  // 30
+    const int cal_bl_x = CALIBRATION_POINTS[CAL_BL].position.x;  // 30
+    const int cal_bl_y = CALIBRATION_POINTS[CAL_BL].position.y;  // 210
+    const int cal_br_x = CALIBRATION_POINTS[CAL_BR].position.x;  // 290
+    const int cal_br_y = CALIBRATION_POINTS[CAL_BR].position.y;  // 210
+    
+    // Os valores RAW capturados são originais (não invertidos)
+    // Mas a calibração precisa mapear valores RAW que serão invertidos antes do mapeamento
+    // Então precisamos inverter os valores RAW durante a calibração se a inversão estiver ativa
+    constexpr uint16_t XPT2046_MAX_RAW = 4095;
+    
+    uint32_t raw_left, raw_right, raw_top, raw_bottom;
+    
+    if (TOUCH_INVERT_X) {
+        // Inverter X: valores maiores RAW = esquerda na tela, valores menores RAW = direita na tela
+        // Mas na calibração, queremos que raw_left corresponda à esquerda física
+        // Então invertemos: raw_left vem de TR/BR (que são direita física)
+        raw_left = avg(XPT2046_MAX_RAW - calibration_samples[CAL_TR].rawX, 
+                       XPT2046_MAX_RAW - calibration_samples[CAL_BR].rawX);
+        raw_right = avg(XPT2046_MAX_RAW - calibration_samples[CAL_TL].rawX, 
+                        XPT2046_MAX_RAW - calibration_samples[CAL_BL].rawX);
+    } else {
+        raw_left = avg(calibration_samples[CAL_TL].rawX, calibration_samples[CAL_BL].rawX);
+        raw_right = avg(calibration_samples[CAL_TR].rawX, calibration_samples[CAL_BR].rawX);
+    }
+    
+    if (TOUCH_INVERT_Y) {
+        // Inverter Y: valores maiores RAW = topo na tela, valores menores RAW = base na tela
+        raw_top = avg(XPT2046_MAX_RAW - calibration_samples[CAL_TL].rawY, 
+                      XPT2046_MAX_RAW - calibration_samples[CAL_TR].rawY);
+        raw_bottom = avg(XPT2046_MAX_RAW - calibration_samples[CAL_BL].rawY, 
+                         XPT2046_MAX_RAW - calibration_samples[CAL_BR].rawY);
+    } else {
+        raw_top = avg(calibration_samples[CAL_TL].rawY, calibration_samples[CAL_TR].rawY);
+        raw_bottom = avg(calibration_samples[CAL_BL].rawY, calibration_samples[CAL_BR].rawY);
+    }
+
+    ESP_LOGI(TAG, "=== VALORES CALCULADOS ===");
+    ESP_LOGI(TAG, "raw_left=%u raw_right=%u", raw_left, raw_right);
+    ESP_LOGI(TAG, "raw_top=%u raw_bottom=%u", raw_top, raw_bottom);
+    ESP_LOGI(TAG, "Posições calibração: TL=(%d,%d) TR=(%d,%d) BL=(%d,%d) BR=(%d,%d)",
+             cal_tl_x, cal_tl_y, cal_tr_x, cal_tr_y, cal_bl_x, cal_bl_y, cal_br_x, cal_br_y);
+
+    // Mapear valores RAW para coordenadas de tela usando interpolação linear
+    // Os valores RAW capturados correspondem às posições de calibração (30, 30) e (290, 30)
+    // Precisamos extrapolar para os cantos absolutos (0 e 320 para X, 0 e 240 para Y)
+    
+    // Para X: raw_left corresponde a cal_tl_x (30), raw_right corresponde a cal_tr_x (290)
+    // Queremos encontrar raw_xMin (que corresponde a X=0) e raw_xMax (que corresponde a X=320)
+    // Usando interpolação linear: se raw_left -> 30 e raw_right -> 290
+    // Então: raw_xMin = raw_left - (raw_right - raw_left) * (30 - 0) / (290 - 30)
+    //        raw_xMax = raw_right + (raw_right - raw_left) * (320 - 290) / (290 - 30)
+    const int32_t x_range_raw = raw_right - raw_left;
+    const int32_t x_range_screen_cal = cal_tr_x - cal_tl_x;  // 290 - 30 = 260
+    const int32_t x_left_offset = cal_tl_x;  // 30 (distância do canto esquerdo)
+    const int32_t x_right_offset = screen_w - cal_tr_x;  // 320 - 290 = 30 (distância do canto direito)
+    
+    // Extrapolar para o canto esquerdo (X=0)
+    // raw_xMin = raw_left - (raw_right - raw_left) * x_left_offset / x_range_screen_cal
+    int32_t xMin_calc = raw_left - (x_range_raw * x_left_offset) / x_range_screen_cal;
+    if (xMin_calc < 0) xMin_calc = 0;
+    
+    // Extrapolar para o canto direito (X=320)
+    // raw_xMax = raw_right + (raw_right - raw_left) * x_right_offset / x_range_screen_cal
+    int32_t xMax_calc = raw_right + (x_range_raw * x_right_offset) / x_range_screen_cal;
+    
+    new_cal.xMin = static_cast<uint16_t>(xMin_calc);
+    new_cal.xMax = static_cast<uint16_t>(xMax_calc);
+
+    // Para Y: similar, mas precisamos considerar inversão
+    // raw_top corresponde a cal_tl_y (30), raw_bottom corresponde a cal_bl_y (210)
+    // Queremos encontrar raw_yMin (que corresponde a Y=0) e raw_yMax (que corresponde a Y=240)
+    const int32_t y_range_raw = (raw_bottom > raw_top) ? (raw_bottom - raw_top) : (raw_top - raw_bottom);
+    const int32_t y_range_screen_cal = cal_bl_y - cal_tl_y;  // 210 - 30 = 180
+    const int32_t y_top_offset = cal_tl_y;  // 30 (distância do topo)
+    const int32_t y_bottom_offset = screen_h - cal_bl_y;  // 240 - 210 = 30 (distância da base)
+    
+    int32_t yMin_calc, yMax_calc;
+    if (raw_top < raw_bottom) {
+        // Y normal: valores menores = topo
+        // Extrapolar para o topo (Y=0)
+        yMin_calc = raw_top - (y_range_raw * y_top_offset) / y_range_screen_cal;
+        if (yMin_calc < 0) yMin_calc = 0;
+        // Extrapolar para a base (Y=240)
+        yMax_calc = raw_bottom + (y_range_raw * y_bottom_offset) / y_range_screen_cal;
+    } else {
+        // Y invertido: valores maiores = topo
+        // Extrapolar para o topo (Y=0) - raw_top é maior, então corresponde ao topo
+        yMax_calc = raw_top + (y_range_raw * y_top_offset) / y_range_screen_cal;
+        // Extrapolar para a base (Y=240) - raw_bottom é menor, então corresponde à base
+        yMin_calc = raw_bottom - (y_range_raw * y_bottom_offset) / y_range_screen_cal;
+        if (yMin_calc < 0) yMin_calc = 0;
+    }
+    new_cal.yMin = static_cast<uint16_t>(yMin_calc);
+    new_cal.yMax = static_cast<uint16_t>(yMax_calc);
+
+    if (new_cal.xMin > new_cal.xMax) {
+        std::swap(new_cal.xMin, new_cal.xMax);
+    }
+    if (new_cal.yMin > new_cal.yMax) {
+        std::swap(new_cal.yMin, new_cal.yMax);
+    }
+
+    ESP_LOGI(TAG, "=== CALIBRAÇÃO FINAL ===");
+    ESP_LOGI(TAG, "xMin=%u xMax=%u yMin=%u yMax=%u", new_cal.xMin, new_cal.xMax, new_cal.yMin, new_cal.yMax);
+
+    DisplayDriver::instance().update_touch_calibration(new_cal);
+
+    lvgl_lock();
+    if (calibration_screen != nullptr) {
+        lv_obj_del(calibration_screen);
+        calibration_screen = nullptr;
+        calibration_label = nullptr;
+        calibration_target = nullptr;
+    }
+    lvgl_unlock();
+
+    // Voltar para o estado anterior (configuração ou pergunta)
+    if (state_before_calibration == AppState::CONFIGURATION) {
+        current_state = AppState::CONFIGURATION;
+        show_configuration_screen();
+    } else {
+        current_state = AppState::QUESTION;
+        show_question_screen();
+    }
+}
+
+static void calibration_touch_event_cb(lv_event_t *e) {
+    if (current_state != AppState::CALIBRATION) {
+        return;
+    }
+
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_RELEASED) {
+        calibration_point_captured = false;
+        return;
+    }
+
+    if (code != LV_EVENT_PRESSED || calibration_point_captured) {
+        return;
+    }
+
+    TouchPoint raw = DisplayDriver::instance().last_touch_point();
+    if (raw.pressure < CAL_MIN_PRESSURE) {
+        return;
+    }
+
+    calibration_samples[current_calibration_index] = raw;
+    calibration_point_captured = true;
+    current_calibration_index++;
+
+    if (current_calibration_index >= CALIBRATION_POINT_COUNT) {
+        finish_calibration();
+    } else {
+        update_calibration_ui();
+    }
+}
+
+void start_calibration() {
+    ESP_LOGI(TAG, "Iniciando calibração do touch");
+    // Salvar estado atual para voltar após calibração
+    state_before_calibration = current_state;
+    current_state = AppState::CALIBRATION;
+    current_calibration_index = 0;
+    calibration_point_captured = false;
+
+    lvgl_lock();
+
+    if (calibration_screen != nullptr) {
+        lv_obj_del(calibration_screen);
+        calibration_screen = nullptr;
+        calibration_label = nullptr;
+        calibration_target = nullptr;
+    }
+
+    calibration_screen = lv_obj_create(nullptr);
+    lv_obj_remove_style_all(calibration_screen);
+    lv_obj_set_style_bg_color(calibration_screen, lv_color_hex(0x101010), 0);
+    lv_obj_set_style_bg_opa(calibration_screen, LV_OPA_COVER, 0);
+    lv_obj_add_flag(calibration_screen, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(calibration_screen, LV_OBJ_FLAG_EVENT_BUBBLE);
+    lv_screen_load(calibration_screen);
+
+    calibration_label = lv_label_create(calibration_screen);
+    lv_label_set_text(calibration_label, "Calibrando tela...");
+    lv_obj_set_width(calibration_label, 280);
+    lv_obj_set_style_text_color(calibration_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(calibration_label, &lv_font_montserrat_16, 0);
+    lv_obj_align(calibration_label, LV_ALIGN_TOP_MID, 0, 20);
+
+    calibration_target = lv_obj_create(calibration_screen);
+    lv_obj_remove_style_all(calibration_target);
+    lv_obj_set_size(calibration_target, CAL_TARGET_SIZE, CAL_TARGET_SIZE);
+    lv_obj_set_style_bg_color(calibration_target, lv_color_hex(0xFF5722), 0);
+    lv_obj_set_style_bg_opa(calibration_target, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(calibration_target, LV_RADIUS_CIRCLE, 0);
+    lv_obj_add_flag(calibration_target, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(calibration_target, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    lv_obj_add_event_cb(calibration_screen, calibration_touch_event_cb, LV_EVENT_ALL, nullptr);
+    lv_obj_add_event_cb(calibration_target, calibration_touch_event_cb, LV_EVENT_ALL, nullptr);
+
+    update_calibration_ui();
+    lvgl_unlock();
+}
+
+void create_question_screen() {
+    ESP_LOGI(TAG, "create_question_screen() iniciado");
+    ESP_LOGI(TAG, "Chamando lvgl_lock()...");
+    lvgl_lock();
+    ESP_LOGI(TAG, "Mutex adquirido, continuando criação da tela...");
+    
+    if (question_screen != nullptr) {
+        ESP_LOGI(TAG, "Deletando tela existente...");
+        lv_obj_del(question_screen);
+        question_screen = nullptr;
+    }
+    
+    ESP_LOGI(TAG, "Criando nova tela...");
+    // Criar tela base - sem padding, sem estilo extra
+    question_screen = lv_obj_create(nullptr);
+    if (question_screen == nullptr) {
+        ESP_LOGE(TAG, "Falha ao criar question_screen");
+        lvgl_unlock();
+        return;
+    }
+    ESP_LOGI(TAG, "Tela criada: %p", question_screen);
+    
+    ESP_LOGI(TAG, "Carregando tela como ativa...");
+    // Carregar a tela ANTES de criar elementos para garantir que seja a tela ativa
+    lv_screen_load(question_screen);
+    ESP_LOGI(TAG, "Tela carregada");
+    
+    lv_obj_remove_style_all(question_screen);
+    lv_obj_set_style_bg_color(question_screen, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_set_style_bg_opa(question_screen, LV_OPA_COVER, 0);
+    // Não definir tamanho/posição - screens sempre ocupam toda a tela
+    lv_obj_clear_flag(question_screen, LV_OBJ_FLAG_SCROLLABLE);
+    // Garantir que a tela não bloqueie eventos (deixar eventos passarem para os filhos)
+    lv_obj_clear_flag(question_screen, LV_OBJ_FLAG_CLICKABLE);
+    ESP_LOGI(TAG, "Estilos da tela configurados");
+    
+    // Título simples no topo
+    ESP_LOGI(TAG, "Criando label...");
+    question_label = lv_label_create(question_screen);
+    lv_label_set_text(question_label, "Como voce se sentiu hoje?");
+    lv_label_set_long_mode(question_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(question_label, 300);
+    lv_obj_set_style_text_align(question_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(question_label, lv_color_hex(0x111111), 0);
+    lv_obj_set_style_text_font(question_label, &lv_font_montserrat_24, 0);
+    lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, 20);
+
+    // Botão pequeno de configurações no canto superior direito
+    if (settings_button != nullptr) {
+        lv_obj_del(settings_button);
+        settings_button = nullptr;
+    }
+    settings_button = lv_button_create(question_screen);
+    lv_obj_remove_style_all(settings_button);
+    lv_obj_set_size(settings_button, 32, 32);
+    lv_obj_set_pos(settings_button, 280, 8);
+    lv_obj_set_style_bg_color(settings_button, lv_color_hex(0x607D8B), 0);
+    lv_obj_set_style_bg_opa(settings_button, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(settings_button, 16, 0);
+    lv_obj_set_style_border_width(settings_button, 0, 0);
+    lv_obj_add_event_cb(settings_button, settings_button_cb, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *settings_label = lv_label_create(settings_button);
+    lv_label_set_text(settings_label, LV_SYMBOL_SETTINGS);
+    lv_obj_center(settings_label);
+    lv_obj_set_style_text_color(settings_label, lv_color_white(), 0);
+    
+    // Botões posicionados manualmente - layout simples e direto
+    // 5 botões de 50px cada = 250px
+    // Espaço disponível: 320px - 20px (margens) = 300px
+    // Espaçamento: (300 - 250) / 4 = 12.5px entre botões
+    constexpr int BTN_SIZE = 50;
+    constexpr int BTN_SPACING = 12;
+    // Calcular posição inicial para centralizar os botões
+    // Total de largura: 5 * BTN_SIZE + 4 * BTN_SPACING = 250 + 48 = 298px
+    // Posição inicial: (320 - 298) / 2 = 11px
+    constexpr int BTN_START_X = 11;
+    constexpr int BTN_Y = 120; // Centro vertical aproximado
+    
+    ESP_LOGI(TAG, "Criando %d botões...", 5);
+    ESP_LOGI(TAG, "Botões: tamanho=%d, espaçamento=%d, start_x=%d, y=%d", 
+             BTN_SIZE, BTN_SPACING, BTN_START_X, BTN_Y);
+    for (int i = 0; i < 5; i++) {
+        int btn_x = BTN_START_X + i * (BTN_SIZE + BTN_SPACING);
+        ESP_LOGI(TAG, "Criando botão %d em posição (%d, %d)...", i, btn_x, BTN_Y);
+        // Criar botão diretamente na tela, sem container intermediário
+        rating_buttons[i] = lv_button_create(question_screen);
+        
+        // Remover todos os estilos padrão antes de definir tamanho/posição
+        lv_obj_remove_style_all(rating_buttons[i]);
+        
+        // Tamanho fixo e posição absoluta
+        lv_obj_set_size(rating_buttons[i], BTN_SIZE, BTN_SIZE);
+        lv_obj_set_pos(rating_buttons[i], btn_x, BTN_Y);
+        
+        // Estilo mínimo: apenas cor de fundo e borda
+        lv_obj_set_style_bg_color(rating_buttons[i], RATING_COLORS[i], 0);
+        lv_obj_set_style_bg_opa(rating_buttons[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(rating_buttons[i], BTN_SIZE / 2, 0); // Círculo perfeito
+        
+        // Borda simples
+        lv_obj_set_style_border_width(rating_buttons[i], 2, 0);
+        lv_obj_set_style_border_color(rating_buttons[i], lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_opa(rating_buttons[i], LV_OPA_COVER, 0);
+        
+        // Garantir que o botão seja clicável
+        lv_obj_clear_flag(rating_buttons[i], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(rating_buttons[i], LV_OBJ_FLAG_CLICKABLE);
+        
+        // Label com número
+        lv_obj_t *btn_label = lv_label_create(rating_buttons[i]);
+        lv_label_set_text(btn_label, RATING_NUMBERS[i]);
+        lv_obj_center(btn_label);
+        lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(btn_label, lv_color_white(), 0);
+        
+        // Callback apenas para eventos de clique
+        lv_obj_add_event_cb(rating_buttons[i], rating_button_cb, LV_EVENT_CLICKED,
+                           reinterpret_cast<void*>(static_cast<intptr_t>(i + 1)));
+        
+        ESP_LOGI(TAG, "Botão %d criado: %p, posição (%d,%d), tamanho %dx%d", 
+                 i, rating_buttons[i], btn_x, BTN_Y, BTN_SIZE, BTN_SIZE);
+        
+        // Invalidar cada botão para garantir renderização
+        lv_obj_invalidate(rating_buttons[i]);
+    }
+    
+    // Invalidar o label também
+    lv_obj_invalidate(question_label);
+    
+    // Invalidar toda a tela para garantir renderização completa
+    lv_obj_invalidate(question_screen);
+    
+    // Garantir que o layout seja atualizado antes do refresh
+    lv_obj_update_layout(question_screen);
+    
+    ESP_LOGI(TAG, "Tela de pergunta criada: %p, Label: %p, Botões: %p %p %p %p %p", 
+             question_screen, question_label,
+             rating_buttons[0], rating_buttons[1], rating_buttons[2], 
+             rating_buttons[3], rating_buttons[4]);
+    
+    // Forçar refresh imediato após criar todos os elementos
+    if (display_handle != nullptr) {
+        ESP_LOGI(TAG, "Forçando refresh imediato do display");
+        lv_refr_now(display_handle);
+    } else {
+        ESP_LOGE(TAG, "display_handle é nullptr - não é possível fazer refresh");
+    }
+    
+    ESP_LOGI(TAG, "Tela de pergunta criada com sucesso");
+    lvgl_unlock();
+    
+    // Dar um pequeno delay para garantir que o refresh aconteceu
+    vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+void create_thank_you_screen() {
+    if (thank_you_screen != nullptr) {
+        lv_obj_del(thank_you_screen);
+    }
+    
+    thank_you_screen = lv_obj_create(nullptr);
+    lv_obj_remove_style_all(thank_you_screen);
+    lv_obj_set_style_bg_color(thank_you_screen, lv_color_hex(0xE8F5E9), 0); // Verde claro
+    lv_obj_set_style_bg_opa(thank_you_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(thank_you_screen, 20, 0);
+    lv_obj_set_style_pad_ver(thank_you_screen, 36, 0);
+    lv_obj_clear_flag(thank_you_screen, LV_OBJ_FLAG_SCROLLABLE);
+    
+    // Mensagem de agradecimento
+    thank_you_label = lv_label_create(thank_you_screen);
+    lv_label_set_text(thank_you_label, "Obrigado!");
+    lv_obj_set_style_text_align(thank_you_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(thank_you_label, lv_color_hex(0x1B5E20), 0); // Verde escuro
+    lv_obj_set_style_text_font(thank_you_label, TITLE_FONT, 0);
+    lv_obj_align(thank_you_label, LV_ALIGN_TOP_MID, 0, 0);
+    
+    thank_you_summary = lv_label_create(thank_you_screen);
+    lv_label_set_text_fmt(thank_you_summary,
+                          "Você registrou %d de 5 (%s).",
+                          selected_rating,
+                          RATING_MESSAGES[selected_rating - 1]);
+    lv_obj_set_style_text_align(thank_you_summary, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(thank_you_summary, lv_color_hex(0x2E7D32), 0);
+    lv_obj_set_style_text_font(thank_you_summary, CAPTION_FONT, 0);
+    lv_obj_set_width(thank_you_summary, LV_PCT(90));
+    lv_label_set_long_mode(thank_you_summary, LV_LABEL_LONG_WRAP);
+    lv_obj_align(thank_you_summary, LV_ALIGN_TOP_MID, 0, 36);
+    
+    // Botão para reiniciar
+    restart_button = lv_button_create(thank_you_screen);
+    lv_obj_set_size(restart_button, 150, 44);
+    lv_obj_align(restart_button, LV_ALIGN_BOTTOM_MID, 0, -16);
+    
+    lv_obj_set_style_bg_color(restart_button, lv_color_hex(0x2196F3), 0); // Azul
+    lv_obj_set_style_bg_opa(restart_button, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(restart_button, lv_color_white(), 0);
+    lv_obj_set_style_radius(restart_button, 16, 0);
+    lv_obj_set_style_shadow_color(restart_button, lv_color_hex(0x1976D2), 0);
+    lv_obj_set_style_shadow_width(restart_button, 12, 0);
+    
+    lv_obj_t *restart_label = lv_label_create(restart_button);
+    lv_label_set_text(restart_label, "Nova Avaliação");
+    lv_obj_center(restart_label);
+    lv_obj_set_style_text_font(restart_label, TEXT_FONT, 0);
+    
+    lv_obj_add_event_cb(restart_button, restart_button_cb, LV_EVENT_CLICKED, nullptr);
+}
+
+void create_configuration_screen() {
+    if (configuration_screen != nullptr) {
+        lv_obj_del(configuration_screen);
+    }
+    
+    configuration_screen = lv_obj_create(nullptr);
+    lv_obj_remove_style_all(configuration_screen);
+    lv_obj_set_style_bg_color(configuration_screen, lv_color_hex(0xF5F5F5), 0);
+    lv_obj_set_style_bg_opa(configuration_screen, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(configuration_screen, LV_OBJ_FLAG_SCROLLABLE);
+    
+    // Título
+    lv_obj_t *title_label = lv_label_create(configuration_screen);
+    lv_label_set_text(title_label, "Configurações");
+    lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0x212121), 0);
+    lv_obj_set_style_text_font(title_label, TITLE_FONT, 0);
+    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 20);
+    
+    // Botão de calibração
+    config_calibrate_button = lv_button_create(configuration_screen);
+    lv_obj_set_size(config_calibrate_button, 200, 50);
+    lv_obj_align(config_calibrate_button, LV_ALIGN_CENTER, 0, -20);
+    
+    lv_obj_set_style_bg_color(config_calibrate_button, lv_color_hex(0x2196F3), 0);
+    lv_obj_set_style_bg_opa(config_calibrate_button, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(config_calibrate_button, lv_color_white(), 0);
+    lv_obj_set_style_radius(config_calibrate_button, 16, 0);
+    
+    lv_obj_t *calib_label = lv_label_create(config_calibrate_button);
+    lv_label_set_text(calib_label, "Calibrar Tela");
+    lv_obj_center(calib_label);
+    lv_obj_set_style_text_font(calib_label, TEXT_FONT, 0);
+    
+    lv_obj_add_event_cb(config_calibrate_button, config_calibrate_button_cb, LV_EVENT_CLICKED, nullptr);
+    
+    // Botão de voltar
+    lv_obj_t *back_button = lv_button_create(configuration_screen);
+    lv_obj_set_size(back_button, 150, 44);
+    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -16);
+    
+    lv_obj_set_style_bg_color(back_button, lv_color_hex(0x757575), 0);
+    lv_obj_set_style_bg_opa(back_button, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(back_button, lv_color_white(), 0);
+    lv_obj_set_style_radius(back_button, 16, 0);
+    
+    lv_obj_t *back_label = lv_label_create(back_button);
+    lv_label_set_text(back_label, "Voltar");
+    lv_obj_center(back_label);
+    lv_obj_set_style_text_font(back_label, TEXT_FONT, 0);
+    
+    lv_obj_add_event_cb(back_button, config_back_button_cb, LV_EVENT_CLICKED, nullptr);
+}
+
+void show_configuration_screen() {
+    current_state = AppState::CONFIGURATION;
+    
+    lvgl_lock();
+    
+    if (configuration_screen == nullptr) {
+        create_configuration_screen();
+    }
+    
+    lv_screen_load(configuration_screen);
+    lv_refr_now(display_handle);
+    lvgl_unlock();
+}
+
+void show_thank_you_screen() {
+    current_state = AppState::THANK_YOU;
+    
+    lvgl_lock();
+    
+    if (thank_you_screen == nullptr) {
+        create_thank_you_screen();
+    }
+    
+    if (thank_you_summary != nullptr) {
+        lv_label_set_text_fmt(thank_you_summary,
+                              "Você registrou %d de 5 (%s).",
+                              selected_rating,
+                              RATING_MESSAGES[selected_rating - 1]);
+    }
+    
+    lv_screen_load(thank_you_screen);
+    lv_refr_now(display_handle);
+    
+    lvgl_unlock();
+}
+
+void show_question_screen() {
+    ESP_LOGI(TAG, "show_question_screen() chamado");
+    current_state = AppState::QUESTION;
+    selected_rating = 0;
+    
+    if (question_screen == nullptr) {
+        ESP_LOGI(TAG, "question_screen é nullptr, criando nova tela...");
+        // create_question_screen() já faz lock internamente
+        create_question_screen();
+    } else {
+        ESP_LOGI(TAG, "question_screen já existe, apenas carregando...");
+        // Se a tela já existe, apenas carregar ela
+        lvgl_lock();
+        lv_screen_load(question_screen);
+        
+        // Resetar estado dos botões
+        for (int i = 0; i < 5; i++) {
+            if (rating_buttons[i] != nullptr) {
+                lv_obj_set_style_bg_opa(rating_buttons[i], LV_OPA_COVER, 0);
+                lv_obj_set_style_transform_scale(rating_buttons[i], 1000, 0);
+                lv_obj_invalidate(rating_buttons[i]);
+            }
+        }
+        
+        // Invalidar toda a tela para garantir renderização completa
+        lv_obj_invalidate(question_screen);
+        
+        // Forçar refresh imediato
+        if (display_handle != nullptr) {
+            lv_refr_now(display_handle);
+        }
+        
+        lvgl_unlock();
+    }
+    // Se question_screen == nullptr, create_question_screen() já fez unlock internamente
+}
+
+} // namespace
+
+namespace ui {
+
+void init(lv_display_t *display) {
+    ESP_LOGI(TAG, "=== INICIANDO UI ===");
+    
+    if (display == nullptr) {
+        ESP_LOGE(TAG, "Display LVGL inválido - display é nullptr!");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Display recebido: %p", display);
+    display_handle = display;
+    
+    ESP_LOGI(TAG, "Definindo display padrão...");
+    // Definir display padrão (não precisa de lock para isso)
+    lvgl_lock();
+    lv_display_set_default(display);
+    lvgl_unlock();
+    
+    auto &driver = DisplayDriver::instance();
+    if (driver.has_custom_calibration()) {
+        ESP_LOGI(TAG, "Calibração existente detectada - pulando fluxo de calibração");
+        current_state = AppState::QUESTION;
+        show_question_screen();
+    } else {
+        ESP_LOGI(TAG, "Iniciando fluxo de calibração...");
+        start_calibration();
+    }
+    
+    ESP_LOGI(TAG, "=== UI INICIALIZADA COM SUCESSO ===");
+    ESP_LOGI(TAG, "UI de pesquisa de satisfação inicializada");
+}
+
+void update() {
+    // Processar transição de tela pendente (feito de forma assíncrona para evitar problemas de contexto)
+    if (pending_screen_transition && current_state == AppState::QUESTION) {
+        transition_delay_counter++;
+        // Aguardar 5 ciclos (500ms) antes de fazer a transição para garantir que o LVGL processou o evento
+        if (transition_delay_counter >= 5) {
+            pending_screen_transition = false;
+            transition_delay_counter = 0;
+            show_thank_you_screen();
+        }
+    }
+}
+
+int get_current_rating() {
+    return selected_rating;
+}
+
+} // namespace ui

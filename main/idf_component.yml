@@ -1,0 +1,9 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=4.1.0'
+  # LVGL Oficial
+  lvgl/lvgl: ^9.4.0
+  # Driver ILI9341 para ESP-IDF
+  espressif/esp_lcd_ili9341: ^2.0.0
