@@ -120,43 +120,14 @@ void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
                  flush_count, x1, y1, x2, y2, width, height, px_map);
     }
 
-    // Converter RGB565 para BGR565 trocando bytes (painel está em BGR)
-    // RGB565: RRRRR GGGGGG BBBBB (16 bits)
-    // BGR565: BBBBB GGGGGG RRRRR (16 bits)
-    // Trocar bytes: (byte0, byte1) -> (byte1, byte0) não funciona diretamente
-    // Precisamos trocar R e B mantendo G
+    // Painel configurado como RGB, então podemos usar os dados diretamente do LVGL
+    // LVGL gera RGB565, que é compatível com o painel RGB
+    // Não precisamos fazer conversão, o que elimina artefatos e melhora performance
     uint16_t *pixels = (uint16_t *)px_map;
-    static uint16_t *converted_buffer = nullptr;
-    static size_t converted_buffer_size = 0;
-    
-    // Alocar buffer de conversão se necessário
-    if (converted_buffer_size < pixel_count) {
-        if (converted_buffer != nullptr) {
-            heap_caps_free(converted_buffer);
-        }
-        converted_buffer = (uint16_t *)heap_caps_malloc(pixel_count * sizeof(uint16_t), MALLOC_CAP_DMA);
-        if (converted_buffer == nullptr) {
-            ESP_LOGE("DisplayDriver", "Falha ao alocar buffer de conversão");
-            lv_display_flush_ready(disp);
-            return;
-        }
-        converted_buffer_size = pixel_count;
-    }
-    
-    // Converter RGB565 para BGR565: trocar R e B, manter G
-    for (int32_t i = 0; i < pixel_count; i++) {
-        uint16_t rgb565 = pixels[i];
-        // Extrair componentes: RRRRR GGGGGG BBBBB
-        uint16_t r = (rgb565 >> 11) & 0x1F;  // 5 bits vermelho
-        uint16_t g = (rgb565 >> 5) & 0x3F;   // 6 bits verde
-        uint16_t b = rgb565 & 0x1F;          // 5 bits azul
-        // Reorganizar para BGR565: BBBBB GGGGGG RRRRR
-        converted_buffer[i] = (b << 11) | (g << 5) | r;
-    }
 
-    // Enviar bitmap convertido para o painel
+    // Enviar bitmap diretamente para o painel (sem conversão)
     // esp_lcd_panel_draw_bitmap espera coordenadas onde x_end e y_end são exclusivos
-    esp_err_t err = esp_lcd_panel_draw_bitmap(panel_handle, x1, y1, x2 + 1, y2 + 1, (void *)converted_buffer);
+    esp_err_t err = esp_lcd_panel_draw_bitmap(panel_handle, x1, y1, x2 + 1, y2 + 1, (void *)pixels);
     if (err != ESP_OK) {
         ESP_LOGE("DisplayDriver", "Erro ao desenhar bitmap: %s", esp_err_to_name(err));
     }
@@ -311,8 +282,9 @@ esp_err_t DisplayDriver::init_panel_device() {
 
     esp_lcd_panel_dev_config_t panel_config = {};
     panel_config.reset_gpio_num = PIN_NUM_RST;
-    // ILI9341 - tentar BGR (padrão do ILI9341)
-    panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
+    // ILI9341 - usar RGB para evitar conversão manual que pode causar artefatos
+    // A conversão será feita no flush callback se necessário
+    panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
     panel_config.bits_per_pixel = 16;
 
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_ili9341(panel_io_, &panel_config, &panel_handle_),
@@ -428,11 +400,12 @@ esp_err_t DisplayDriver::init_lvgl() {
     // Criar task para timer handler do LVGL
     // Prioridade 1 (acima do IDLE que é 0) para não bloquear o watchdog
     // Core 1 para não interferir com o IDLE do Core 0 (evita watchdog)
+    // Stack size aumentado para 8192 para evitar stack overflow durante refresh de telas
     TaskHandle_t created_task_handle = nullptr;
     BaseType_t task_result = xTaskCreatePinnedToCore(
         lvgl_timer_task,
         "lvgl_timer",
-        4096,  // Stack size
+        8192,  // Stack size aumentado de 4096 para 8192 para evitar overflow
         nullptr,
         1,     // Priority (reduzida de 5 para 1)
         &created_task_handle,
@@ -569,8 +542,11 @@ esp_err_t DisplayDriver::create_lvgl_display() {
     lv_display_set_color_format(lv_display_, LV_COLOR_FORMAT_RGB565);
 
     // Alocar buffers DMA-capable - usar PARTIAL mode (mais eficiente em memória)
-    // PARTIAL mode usa buffers menores (1/10 da tela é recomendado)
-    constexpr size_t buffer_size = LCD_H_RES * LCD_V_RES / 10; // 1/10 da tela
+    // PARTIAL mode usa buffers menores - aumentado para 1/10 da tela para evitar truncamento
+    // 1/10 = ~7680 pixels = ~15KB por buffer (total ~30KB)
+    // Isso ainda economiza RAM comparado ao tamanho total (76.8KB), mas é suficiente
+    // para renderizar elementos maiores (botões, fontes) sem truncamento
+    constexpr size_t buffer_size = LCD_H_RES * LCD_V_RES / 10; // 1/10 da tela (balance RAM/qualidade)
     constexpr size_t buffer_bytes = buffer_size * sizeof(uint16_t);
     
     void *buf1 = heap_caps_malloc(buffer_bytes, MALLOC_CAP_DMA);

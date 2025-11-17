@@ -11,6 +11,9 @@
 #include "lvgl.h"
 #include "display_driver.hpp"
 
+// Declarar fonte Roboto customizada (suporta acentos portugueses)
+LV_FONT_DECLARE(roboto);
+
 // Mutex externo do display_driver
 extern SemaphoreHandle_t lvgl_mutex;
 extern TaskHandle_t lvgl_task_handle;
@@ -132,10 +135,12 @@ constexpr const char *RATING_MESSAGES[] = {
     "muito satisfeito"
 };
 
-// Fontes principais (usar variações ativas do Montserrat)
-static const lv_font_t *TITLE_FONT = &lv_font_montserrat_20;
-static const lv_font_t *TEXT_FONT = &lv_font_montserrat_16;
-static const lv_font_t *CAPTION_FONT = &lv_font_montserrat_14;
+// Fontes principais - usando fonte Roboto customizada com suporte a acentos
+// Nota: A fonte atual é 6px (muito pequena). Para melhor legibilidade, 
+// considere gerar versões maiores (16px, 20px, 24px) usando o LVGL Font Converter
+static const lv_font_t *TITLE_FONT = &roboto;   // Roboto customizada
+static const lv_font_t *TEXT_FONT = &roboto;    // Roboto customizada
+static const lv_font_t *CAPTION_FONT = &roboto; // Roboto customizada
 
 // Fontes maiores para botões (definidas nas linhas abaixo)
 
@@ -430,7 +435,7 @@ void start_calibration() {
 
     calibration_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(calibration_screen);
-    lv_obj_set_style_bg_color(calibration_screen, lv_color_hex(0x101010), 0);
+    lv_obj_set_style_bg_color(calibration_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
     lv_obj_set_style_bg_opa(calibration_screen, LV_OPA_COVER, 0);
     lv_obj_add_flag(calibration_screen, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(calibration_screen, LV_OBJ_FLAG_EVENT_BUBBLE);
@@ -439,8 +444,12 @@ void start_calibration() {
     calibration_label = lv_label_create(calibration_screen);
     lv_label_set_text(calibration_label, "Calibrando tela...");
     lv_obj_set_width(calibration_label, 280);
-    lv_obj_set_style_text_color(calibration_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(calibration_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(calibration_label, lv_color_hex(0x000000), 0); // Texto preto
+    // Usar fonte Roboto customizada
+    lv_obj_set_style_text_font(calibration_label, TEXT_FONT, 0);
+    // Adicionar padding vertical ao label para evitar corte do texto
+    lv_obj_set_style_pad_top(calibration_label, 4, 0);
+    lv_obj_set_style_pad_bottom(calibration_label, 4, 0);
     lv_obj_align(calibration_label, LV_ALIGN_TOP_MID, 0, 20);
 
     calibration_target = lv_obj_create(calibration_screen);
@@ -487,7 +496,7 @@ void create_question_screen() {
     ESP_LOGI(TAG, "Tela carregada");
     
     lv_obj_remove_style_all(question_screen);
-    lv_obj_set_style_bg_color(question_screen, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_set_style_bg_color(question_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
     lv_obj_set_style_bg_opa(question_screen, LV_OPA_COVER, 0);
     // Não definir tamanho/posição - screens sempre ocupam toda a tela
     lv_obj_clear_flag(question_screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -498,13 +507,18 @@ void create_question_screen() {
     // Título simples no topo
     ESP_LOGI(TAG, "Criando label...");
     question_label = lv_label_create(question_screen);
-    lv_label_set_text(question_label, "Como voce se sentiu hoje?");
+    lv_label_set_text(question_label, "Como você se sentiu hoje?");
     lv_label_set_long_mode(question_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(question_label, 300);
     lv_obj_set_style_text_align(question_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(question_label, lv_color_hex(0x111111), 0);
-    lv_obj_set_style_text_font(question_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_set_style_text_color(question_label, lv_color_hex(0x000000), 0); // Texto preto
+    // Usar fonte Roboto customizada
+    lv_obj_set_style_text_font(question_label, TITLE_FONT, 0);
+    // Adicionar padding vertical ao label para evitar corte do texto
+    lv_obj_set_style_pad_top(question_label, 4, 0);
+    lv_obj_set_style_pad_bottom(question_label, 4, 0);
+    // Mover texto mais para baixo para dar espaço ao botão de configurações (32px altura + 8px top = 40px, usar 55px)
+    lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, 55);
 
     // Botão pequeno de configurações no canto superior direito
     if (settings_button != nullptr) {
@@ -525,6 +539,8 @@ void create_question_screen() {
     lv_label_set_text(settings_label, LV_SYMBOL_SETTINGS);
     lv_obj_center(settings_label);
     lv_obj_set_style_text_color(settings_label, lv_color_white(), 0);
+    // Adicionar padding ao botão de configurações para evitar corte
+    lv_obj_set_style_pad_all(settings_button, 4, 0);
     
     // Botões posicionados manualmente - layout simples e direto
     // 5 botões de 50px cada = 250px
@@ -572,8 +588,11 @@ void create_question_screen() {
         lv_obj_t *btn_label = lv_label_create(rating_buttons[i]);
         lv_label_set_text(btn_label, RATING_NUMBERS[i]);
         lv_obj_center(btn_label);
-        lv_obj_set_style_text_font(btn_label, &lv_font_montserrat_20, 0);
+        // Usar fonte Roboto customizada
+        lv_obj_set_style_text_font(btn_label, TITLE_FONT, 0);
         lv_obj_set_style_text_color(btn_label, lv_color_white(), 0);
+        // Adicionar padding ao botão para evitar corte do texto
+        lv_obj_set_style_pad_all(rating_buttons[i], 4, 0);
         
         // Callback apenas para eventos de clique
         lv_obj_add_event_cb(rating_buttons[i], rating_button_cb, LV_EVENT_CLICKED,
@@ -622,7 +641,7 @@ void create_thank_you_screen() {
     
     thank_you_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(thank_you_screen);
-    lv_obj_set_style_bg_color(thank_you_screen, lv_color_hex(0xE8F5E9), 0); // Verde claro
+    lv_obj_set_style_bg_color(thank_you_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
     lv_obj_set_style_bg_opa(thank_you_screen, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(thank_you_screen, 20, 0);
     lv_obj_set_style_pad_ver(thank_you_screen, 36, 0);
@@ -632,8 +651,11 @@ void create_thank_you_screen() {
     thank_you_label = lv_label_create(thank_you_screen);
     lv_label_set_text(thank_you_label, "Obrigado!");
     lv_obj_set_style_text_align(thank_you_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(thank_you_label, lv_color_hex(0x1B5E20), 0); // Verde escuro
+    lv_obj_set_style_text_color(thank_you_label, lv_color_hex(0x000000), 0); // Texto preto
     lv_obj_set_style_text_font(thank_you_label, TITLE_FONT, 0);
+    // Adicionar padding vertical ao label para evitar corte do texto
+    lv_obj_set_style_pad_top(thank_you_label, 4, 0);
+    lv_obj_set_style_pad_bottom(thank_you_label, 4, 0);
     lv_obj_align(thank_you_label, LV_ALIGN_TOP_MID, 0, 0);
     
     thank_you_summary = lv_label_create(thank_you_screen);
@@ -642,10 +664,13 @@ void create_thank_you_screen() {
                           selected_rating,
                           RATING_MESSAGES[selected_rating - 1]);
     lv_obj_set_style_text_align(thank_you_summary, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(thank_you_summary, lv_color_hex(0x2E7D32), 0);
+    lv_obj_set_style_text_color(thank_you_summary, lv_color_hex(0x000000), 0); // Texto preto
     lv_obj_set_style_text_font(thank_you_summary, CAPTION_FONT, 0);
     lv_obj_set_width(thank_you_summary, LV_PCT(90));
     lv_label_set_long_mode(thank_you_summary, LV_LABEL_LONG_WRAP);
+    // Adicionar padding vertical ao label para evitar corte do texto
+    lv_obj_set_style_pad_top(thank_you_summary, 4, 0);
+    lv_obj_set_style_pad_bottom(thank_you_summary, 4, 0);
     lv_obj_align(thank_you_summary, LV_ALIGN_TOP_MID, 0, 36);
     
     // Botão para reiniciar
@@ -664,6 +689,8 @@ void create_thank_you_screen() {
     lv_label_set_text(restart_label, "Nova Avaliação");
     lv_obj_center(restart_label);
     lv_obj_set_style_text_font(restart_label, TEXT_FONT, 0);
+    // Adicionar padding ao botão para evitar corte do texto
+    lv_obj_set_style_pad_all(restart_button, 4, 0);
     
     lv_obj_add_event_cb(restart_button, restart_button_cb, LV_EVENT_CLICKED, nullptr);
 }
@@ -675,7 +702,7 @@ void create_configuration_screen() {
     
     configuration_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(configuration_screen);
-    lv_obj_set_style_bg_color(configuration_screen, lv_color_hex(0xF5F5F5), 0);
+    lv_obj_set_style_bg_color(configuration_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
     lv_obj_set_style_bg_opa(configuration_screen, LV_OPA_COVER, 0);
     lv_obj_clear_flag(configuration_screen, LV_OBJ_FLAG_SCROLLABLE);
     
@@ -683,8 +710,11 @@ void create_configuration_screen() {
     lv_obj_t *title_label = lv_label_create(configuration_screen);
     lv_label_set_text(title_label, "Configurações");
     lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label, lv_color_hex(0x212121), 0);
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0x000000), 0); // Texto preto
     lv_obj_set_style_text_font(title_label, TITLE_FONT, 0);
+    // Adicionar padding vertical ao label para evitar corte do texto
+    lv_obj_set_style_pad_top(title_label, 4, 0);
+    lv_obj_set_style_pad_bottom(title_label, 4, 0);
     lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 20);
     
     // Botão de calibração
@@ -701,6 +731,8 @@ void create_configuration_screen() {
     lv_label_set_text(calib_label, "Calibrar Tela");
     lv_obj_center(calib_label);
     lv_obj_set_style_text_font(calib_label, TEXT_FONT, 0);
+    // Adicionar padding ao botão para evitar corte do texto
+    lv_obj_set_style_pad_all(config_calibrate_button, 4, 0);
     
     lv_obj_add_event_cb(config_calibrate_button, config_calibrate_button_cb, LV_EVENT_CLICKED, nullptr);
     
@@ -718,6 +750,8 @@ void create_configuration_screen() {
     lv_label_set_text(back_label, "Voltar");
     lv_obj_center(back_label);
     lv_obj_set_style_text_font(back_label, TEXT_FONT, 0);
+    // Adicionar padding ao botão para evitar corte do texto
+    lv_obj_set_style_pad_all(back_button, 4, 0);
     
     lv_obj_add_event_cb(back_button, config_back_button_cb, LV_EVENT_CLICKED, nullptr);
 }
@@ -732,7 +766,10 @@ void show_configuration_screen() {
     }
     
     lv_screen_load(configuration_screen);
-    lv_refr_now(display_handle);
+    // Invalidar a tela para forçar refresh no próximo ciclo do timer handler
+    // Não usar lv_refr_now() aqui para evitar stack overflow na task lvgl_timer
+    lv_obj_invalidate(configuration_screen);
+    
     lvgl_unlock();
 }
 
@@ -753,7 +790,9 @@ void show_thank_you_screen() {
     }
     
     lv_screen_load(thank_you_screen);
-    lv_refr_now(display_handle);
+    // Invalidar a tela para forçar refresh no próximo ciclo do timer handler
+    // Não usar lv_refr_now() aqui para evitar stack overflow na task lvgl_timer
+    lv_obj_invalidate(thank_you_screen);
     
     lvgl_unlock();
 }
@@ -763,36 +802,24 @@ void show_question_screen() {
     current_state = AppState::QUESTION;
     selected_rating = 0;
     
-    if (question_screen == nullptr) {
-        ESP_LOGI(TAG, "question_screen é nullptr, criando nova tela...");
-        // create_question_screen() já faz lock internamente
-        create_question_screen();
-    } else {
-        ESP_LOGI(TAG, "question_screen já existe, apenas carregando...");
-        // Se a tela já existe, apenas carregar ela
+    // Sempre recriar a tela para garantir estado limpo e evitar problemas de UI bagunçada
+    // especialmente quando voltamos das configurações
+    if (question_screen != nullptr) {
+        ESP_LOGI(TAG, "Deletando tela existente para recriar...");
         lvgl_lock();
-        lv_screen_load(question_screen);
-        
-        // Resetar estado dos botões
+        lv_obj_del(question_screen);
+        question_screen = nullptr;
+        question_label = nullptr;
+        settings_button = nullptr;
+        // Limpar referências dos botões
         for (int i = 0; i < 5; i++) {
-            if (rating_buttons[i] != nullptr) {
-                lv_obj_set_style_bg_opa(rating_buttons[i], LV_OPA_COVER, 0);
-                lv_obj_set_style_transform_scale(rating_buttons[i], 1000, 0);
-                lv_obj_invalidate(rating_buttons[i]);
-            }
+            rating_buttons[i] = nullptr;
         }
-        
-        // Invalidar toda a tela para garantir renderização completa
-        lv_obj_invalidate(question_screen);
-        
-        // Forçar refresh imediato
-        if (display_handle != nullptr) {
-            lv_refr_now(display_handle);
-        }
-        
         lvgl_unlock();
     }
-    // Se question_screen == nullptr, create_question_screen() já fez unlock internamente
+    
+    // Criar nova tela limpa (create_question_screen() já faz lock internamente)
+    create_question_screen();
 }
 
 } // namespace
