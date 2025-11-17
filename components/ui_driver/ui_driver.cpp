@@ -88,6 +88,7 @@ lv_obj_t *thank_you_summary = nullptr;
 lv_obj_t *restart_button = nullptr;
 lv_obj_t *settings_button = nullptr;  // Botão de configurações na tela principal
 lv_obj_t *config_calibrate_button = nullptr;  // Botão de calibração na tela de configurações
+lv_obj_t *wifi_status_icon = nullptr;  // Ícone de status WiFi na tela principal
 
 lv_display_t *display_handle = nullptr;
 
@@ -97,6 +98,7 @@ void show_question_screen();
 void show_thank_you_screen();
 void show_configuration_screen();
 void create_configuration_screen();
+static void update_wifi_status_icon();  // Atualizar ícone de status WiFi
 
 // Função helper para criar cores
 static lv_color_t make_color(uint32_t hex) {
@@ -546,6 +548,31 @@ void create_question_screen() {
     // Adicionar padding ao botão de configurações para evitar corte
     lv_obj_set_style_pad_all(settings_button, 4, 0);
     
+    // Ícone de status WiFi no canto superior esquerdo
+    if (wifi_status_icon != nullptr) {
+        lv_obj_del(wifi_status_icon);
+        wifi_status_icon = nullptr;
+    }
+    // Criar ícone WiFi como um botão circular (similar ao botão de configurações)
+    wifi_status_icon = lv_button_create(question_screen);
+    lv_obj_remove_style_all(wifi_status_icon);
+    lv_obj_set_size(wifi_status_icon, 24, 24);
+    lv_obj_set_pos(wifi_status_icon, 8, 8);
+    lv_obj_set_style_bg_color(wifi_status_icon, lv_color_hex(0xFFFFFF), 0); // Fundo branco
+    lv_obj_set_style_bg_opa(wifi_status_icon, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(wifi_status_icon, 12, 0); // Círculo
+    lv_obj_set_style_border_width(wifi_status_icon, 0, 0);
+    lv_obj_clear_flag(wifi_status_icon, LV_OBJ_FLAG_CLICKABLE); // Não clicável
+    
+    // Criar label dentro do botão com o símbolo WiFi
+    lv_obj_t *wifi_label = lv_label_create(wifi_status_icon);
+    lv_label_set_text(wifi_label, LV_SYMBOL_WIFI);
+    lv_obj_center(wifi_label);
+    lv_obj_set_style_text_font(wifi_label, TITLE_FONT, 0);
+    // Cor inicial: vermelho (desconectado) - será atualizada pelo update() depois
+    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0xFF0000), 0);
+    lv_obj_set_style_pad_all(wifi_status_icon, 2, 0);
+    
     // Botões posicionados manualmente - layout simples e direto
     // 5 botões de 50px cada = 250px
     // Espaço disponível: 320px - 20px (margens) = 300px
@@ -623,19 +650,12 @@ void create_question_screen() {
              rating_buttons[0], rating_buttons[1], rating_buttons[2], 
              rating_buttons[3], rating_buttons[4]);
     
-    // Forçar refresh imediato após criar todos os elementos
-    if (display_handle != nullptr) {
-        ESP_LOGI(TAG, "Forçando refresh imediato do display");
-        lv_refr_now(display_handle);
-    } else {
-        ESP_LOGE(TAG, "display_handle é nullptr - não é possível fazer refresh");
-    }
-    
-    ESP_LOGI(TAG, "Tela de pergunta criada com sucesso");
     lvgl_unlock();
+    ESP_LOGI(TAG, "create_question_screen() concluído");
     
-    // Dar um pequeno delay para garantir que o refresh aconteceu
-    vTaskDelay(pdMS_TO_TICKS(100));
+    // Atualizar status WiFi após desbloquear LVGL (para evitar lock duplo)
+    // Será atualizado automaticamente pelo update() também
+    update_wifi_status_icon();
 }
 
 void create_thank_you_screen() {
@@ -839,6 +859,7 @@ void show_question_screen() {
         question_screen = nullptr;
         question_label = nullptr;
         settings_button = nullptr;
+        wifi_status_icon = nullptr;
         // Limpar referências dos botões
         for (int i = 0; i < 5; i++) {
             rating_buttons[i] = nullptr;
@@ -848,6 +869,52 @@ void show_question_screen() {
     
     // Criar nova tela limpa (create_question_screen() já faz lock internamente)
     create_question_screen();
+}
+
+static void update_wifi_status_icon() {
+    if (wifi_status_icon == nullptr) {
+        return;
+    }
+    
+    lvgl_lock();
+    auto& wifi = wifi::WiFiManager::instance();
+    bool connected = wifi.is_connected();
+    
+    // Encontrar o label dentro do botão (primeiro filho)
+    lv_obj_t* wifi_label = lv_obj_get_child(wifi_status_icon, 0);
+    if (wifi_label != nullptr) {
+        // Atualizar cor: verde se conectado, vermelho se desconectado
+        if (connected) {
+            lv_obj_set_style_text_color(wifi_label, lv_color_hex(0x00FF00), 0); // Verde
+        } else {
+            lv_obj_set_style_text_color(wifi_label, lv_color_hex(0xFF0000), 0); // Vermelho
+        }
+        lv_obj_invalidate(wifi_label);
+    }
+    
+    lv_obj_invalidate(wifi_status_icon);
+    lvgl_unlock();
+}
+
+void update() {
+    // Processar transição de tela pendente (feito de forma assíncrona para evitar problemas de contexto)
+    if (pending_screen_transition && current_state == AppState::QUESTION) {
+        transition_delay_counter++;
+        // Aguardar 5 ciclos (500ms) antes de fazer a transição para garantir que o LVGL processou o evento
+        if (transition_delay_counter >= 5) {
+            pending_screen_transition = false;
+            transition_delay_counter = 0;
+            show_thank_you_screen();
+        }
+    }
+    
+    // Atualizar ícone WiFi periodicamente (a cada 10 ciclos = ~1 segundo)
+    static uint32_t wifi_update_counter = 0;
+    wifi_update_counter++;
+    if (wifi_update_counter >= 10 && current_state == AppState::QUESTION) {
+        wifi_update_counter = 0;
+        update_wifi_status_icon();
+    }
 }
 
 } // namespace
@@ -890,16 +957,7 @@ void init(lv_display_t *display) {
 }
 
 void update() {
-    // Processar transição de tela pendente (feito de forma assíncrona para evitar problemas de contexto)
-    if (pending_screen_transition && current_state == AppState::QUESTION) {
-        transition_delay_counter++;
-        // Aguardar 5 ciclos (500ms) antes de fazer a transição para garantir que o LVGL processou o evento
-        if (transition_delay_counter >= 5) {
-            pending_screen_transition = false;
-            transition_delay_counter = 0;
-            show_thank_you_screen();
-        }
-    }
+    ::update(); // Chamar função do namespace anônimo
 }
 
 int get_current_rating() {

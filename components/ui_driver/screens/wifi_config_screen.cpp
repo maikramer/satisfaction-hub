@@ -8,6 +8,8 @@
 #include "lvgl.h"
 #include "widgets/textarea/lv_textarea.h"
 #include "display_driver.hpp"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <cstring>
 
 namespace ui {
@@ -38,9 +40,14 @@ static void connect_button_cb(lv_event_t* e) {
         const char* ssid = current_ssid;
         const char* password = current_password;
         
+        ESP_LOGI(TAG, "Tentando conectar - SSID: '%s', Senha length: %zu", 
+                 ssid ? ssid : "(null)", password ? strlen(password) : 0);
+        
         if (ssid == nullptr || strlen(ssid) == 0) {
+            ESP_LOGE(TAG, "SSID vazio!");
             lv_label_set_text(status_label, "Erro: SSID vazio");
             lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF0000), 0);
+            lv_obj_invalidate(status_label);
             return;
         }
         
@@ -49,18 +56,49 @@ static void connect_button_cb(lv_event_t* e) {
         lv_obj_set_style_text_color(status_label, lv_color_hex(0x0000FF), 0);
         lv_obj_invalidate(status_label);
         
-        // Tentar conectar
-        auto& wifi = wifi::WiFiManager::instance();
-        esp_err_t err = wifi.connect(ssid, password);
-        
-        if (err == ESP_OK) {
-            lv_label_set_text_fmt(status_label, "Conectado! IP: %s", wifi.get_ip());
-            lv_obj_set_style_text_color(status_label, lv_color_hex(0x00FF00), 0);
-        } else {
-            lv_label_set_text(status_label, "Erro ao conectar");
-            lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF0000), 0);
-        }
-        lv_obj_invalidate(status_label);
+        // Tentar conectar (em uma task separada para não bloquear a UI)
+        xTaskCreate([](void* arg) {
+            const char* ssid = (const char*)arg;
+            char password[65];
+            strncpy(password, current_password, sizeof(password) - 1);
+            password[sizeof(password) - 1] = '\0';
+            
+            auto& wifi = wifi::WiFiManager::instance();
+            esp_err_t err = wifi.connect(ssid, password);
+            
+            lvgl_lock();
+            if (err == ESP_OK) {
+                const char* ip = wifi.get_ip();
+                ESP_LOGI(TAG, "Conexão bem-sucedida! IP: %s", ip ? ip : "(null)");
+                if (status_label) {
+                    if (ip) {
+                        lv_label_set_text_fmt(status_label, "Conectado! IP: %s", ip);
+                    } else {
+                        lv_label_set_text(status_label, "Conectado!");
+                    }
+                    lv_obj_set_style_text_color(status_label, lv_color_hex(0x00FF00), 0);
+                }
+                // Atualizar ícone WiFi na tela principal será feito automaticamente pelo update()
+            } else {
+                ESP_LOGE(TAG, "Erro ao conectar: %s", esp_err_to_name(err));
+                if (status_label) {
+                    if (err == ESP_ERR_TIMEOUT) {
+                        lv_label_set_text(status_label, "Timeout ao conectar");
+                    } else if (err == ESP_FAIL) {
+                        lv_label_set_text(status_label, "Senha incorreta?");
+                    } else {
+                        lv_label_set_text(status_label, "Erro ao conectar");
+                    }
+                    lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF0000), 0);
+                }
+            }
+            if (status_label) {
+                lv_obj_invalidate(status_label);
+            }
+            lvgl_unlock();
+            
+            vTaskDelete(nullptr);
+        }, "wifi_connect_task", 4096, (void*)ssid, 5, nullptr);
     }
 }
 
