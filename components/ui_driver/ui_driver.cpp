@@ -1,4 +1,6 @@
 #include "ui_driver.hpp"
+#include "ui_common.hpp"
+#include "screens/wifi_config_screen.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -10,6 +12,7 @@
 #include "freertos/semphr.h"
 #include "lvgl.h"
 #include "display_driver.hpp"
+#include "wifi_manager.hpp"
 
 // Declarar fonte Roboto customizada (suporta acentos portugueses)
 LV_FONT_DECLARE(roboto);
@@ -33,6 +36,25 @@ void lv_imgfont_destroy(lv_font_t * font);
 #endif
 
 
+// Helper para lock/unlock LVGL (exportado para uso em outros arquivos)
+void lvgl_lock() {
+    if (lvgl_mutex != nullptr) {
+        if (xTaskGetCurrentTaskHandle() == lvgl_task_handle) {
+            return; // Já estamos no task do LVGL, não precisa lock
+        }
+        xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
+    }
+}
+
+void lvgl_unlock() {
+    if (lvgl_mutex != nullptr) {
+        if (xTaskGetCurrentTaskHandle() == lvgl_task_handle) {
+            return; // Task do LVGL não adquiriu lock, nada a fazer
+        }
+        xSemaphoreGive(lvgl_mutex);
+    }
+}
+
 namespace {
 constexpr char TAG[] = "UI";
 
@@ -47,6 +69,7 @@ enum class AppState {
     QUESTION,      // Mostrando pergunta de satisfação
     THANK_YOU,     // Mostrando agradecimento
     CONFIGURATION, // Tela de configurações
+    WIFI_CONFIG,   // Tela de configuração WiFi
 };
 
 AppState current_state = AppState::CALIBRATION;
@@ -143,25 +166,6 @@ static const lv_font_t *TEXT_FONT = &roboto;    // Roboto customizada
 static const lv_font_t *CAPTION_FONT = &roboto; // Roboto customizada
 
 // Fontes maiores para botões (definidas nas linhas abaixo)
-
-// Helper para lock/unlock LVGL
-static void lvgl_lock() {
-    if (lvgl_mutex != nullptr) {
-        if (xTaskGetCurrentTaskHandle() == lvgl_task_handle) {
-            return; // Já estamos no task do LVGL, não precisa lock
-        }
-        xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
-    }
-}
-
-static void lvgl_unlock() {
-    if (lvgl_mutex != nullptr) {
-        if (xTaskGetCurrentTaskHandle() == lvgl_task_handle) {
-            return; // Task do LVGL não adquiriu lock, nada a fazer
-        }
-        xSemaphoreGive(lvgl_mutex);
-    }
-}
 
 // Callback para botão de avaliação
 static void rating_button_cb(lv_event_t *e) {
@@ -717,22 +721,46 @@ void create_configuration_screen() {
     lv_obj_set_style_pad_bottom(title_label, 4, 0);
     lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 20);
     
+    // Botão de WiFi
+    lv_obj_t *wifi_button = lv_button_create(configuration_screen);
+    lv_obj_set_size(wifi_button, 200, 45);
+    lv_obj_align(wifi_button, LV_ALIGN_CENTER, 0, -35);
+    
+    lv_obj_set_style_bg_color(wifi_button, lv_color_hex(0x2196F3), 0);
+    lv_obj_set_style_bg_opa(wifi_button, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(wifi_button, lv_color_white(), 0);
+    lv_obj_set_style_radius(wifi_button, 16, 0);
+    lv_obj_set_style_pad_all(wifi_button, 4, 0);
+    
+    lv_obj_t *wifi_label = lv_label_create(wifi_button);
+    lv_label_set_text(wifi_label, "WiFi");
+    lv_obj_center(wifi_label);
+    lv_obj_set_style_text_font(wifi_label, TEXT_FONT, 0);
+    
+    lv_obj_add_event_cb(wifi_button, [](lv_event_t *e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            ESP_LOGI(TAG, "Abrindo configuração WiFi...");
+            current_state = AppState::WIFI_CONFIG;
+            ui::screens::on_back_callback = show_configuration_screen;
+            ui::screens::show_wifi_config_screen();
+        }
+    }, LV_EVENT_CLICKED, nullptr);
+    
     // Botão de calibração
     config_calibrate_button = lv_button_create(configuration_screen);
-    lv_obj_set_size(config_calibrate_button, 200, 50);
-    lv_obj_align(config_calibrate_button, LV_ALIGN_CENTER, 0, -20);
+    lv_obj_set_size(config_calibrate_button, 200, 45);
+    lv_obj_align(config_calibrate_button, LV_ALIGN_CENTER, 0, 20);
     
     lv_obj_set_style_bg_color(config_calibrate_button, lv_color_hex(0x2196F3), 0);
     lv_obj_set_style_bg_opa(config_calibrate_button, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(config_calibrate_button, lv_color_white(), 0);
     lv_obj_set_style_radius(config_calibrate_button, 16, 0);
+    lv_obj_set_style_pad_all(config_calibrate_button, 4, 0);
     
     lv_obj_t *calib_label = lv_label_create(config_calibrate_button);
     lv_label_set_text(calib_label, "Calibrar Tela");
     lv_obj_center(calib_label);
     lv_obj_set_style_text_font(calib_label, TEXT_FONT, 0);
-    // Adicionar padding ao botão para evitar corte do texto
-    lv_obj_set_style_pad_all(config_calibrate_button, 4, 0);
     
     lv_obj_add_event_cb(config_calibrate_button, config_calibrate_button_cb, LV_EVENT_CLICKED, nullptr);
     
@@ -842,6 +870,10 @@ void init(lv_display_t *display) {
     lvgl_lock();
     lv_display_set_default(display);
     lvgl_unlock();
+    
+    // Inicializar WiFi Manager
+    auto& wifi = wifi::WiFiManager::instance();
+    wifi.init();
     
     auto &driver = DisplayDriver::instance();
     if (driver.has_custom_calibration()) {

@@ -1,7 +1,6 @@
 # ESP-IDF built binaries and build-related directories
 build/
 build_*/
-sdkconfig
 sdkconfig.old
 sdkconfig.defaults
 
@@ -19,3 +18,6 @@ __pycache__/
 
 # VS Code specific files (optional, depending on preference)
 .vscode/
+
+# Arquivo de configuração do Supabase (contém credenciais sensíveis)
+supabase_config.h
