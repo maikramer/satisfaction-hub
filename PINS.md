@@ -1,136 +1,155 @@
-# Pinout Rápido - ESP32-CYD Satisfaction Hub
+# CYD Pin Reference
 
-## Resumo Visual dos Pinos
+This document summarizes the pinout of the CYD board for quick reference.
 
-### Display ILI9341 (SPI2_HOST - VSPI)
+---
 
-```
-ESP32                    ILI9341 Display
-┌─────────┐             ┌──────────────┐
-│ GPIO 13 │─────────────│ MOSI (SDI)   │
-│ GPIO 14 │─────────────│ CLK (SCK)    │
-│ GPIO 15 │─────────────│ CS           │
-│ GPIO 2  │─────────────│ DC (RS)      │
-│ GPIO 4  │─────────────│ RST          │
-│ GPIO 21 │─────────────│ BL (Backlight)│
-│ GPIO 12 │─────────────│ MISO (SDO)   │ (não usado)
-└─────────┘             └──────────────┘
-```
+## 📦 Connector Types
 
-**Configuração SPI**:
-- Bus: SPI2_HOST (VSPI)
-- Clock: 26 MHz
-- Mode: SPI Mode 0
-- CS: GPIO 15 (Active Low)
-- DC: GPIO 2 (Data=High, Command=Low)
+| Connector      | Type            | Function                          |
+| -------------- | --------------- | --------------------------------- |
+| [**P1**](#p1)  | 4P 1.25mm JST   | Serial                            |
+| [**P3**](#p3)  | 4P 1.25mm JST   | GPIO                              |
+| [**P4**](#p4)  | 2P 1.25mm JST   | Speaker                           |
+| [**CN1**](#cn1)| 4P 1.25mm JST   | GPIO (I2C)                        |
 
-### Touch Screen XPT2046 (Software SPI - Bit-banging)
+---
 
-```
-ESP32                    XPT2046 Touch
-┌─────────┐             ┌──────────────┐
-│ GPIO 32 │─────────────│ MOSI         │ (Output)
-│ GPIO 25 │─────────────│ CLK          │ (Output)
-│ GPIO 33 │─────────────│ CS           │ (Output, Active Low)
-│ GPIO 39 │─────────────│ MISO         │ (Input-only)
-│ GPIO 36 │─────────────│ IRQ          │ (Input-only, opcional)
-└─────────┘             └──────────────┘
-```
+## 🟢 Accessible GPIO Pins
 
-**Nota**: Touch usa software SPI (bit-banging) porque:
-- SPI1_HOST está reservado para flash
-- SPI2_HOST está em uso pelo display com pinos diferentes
-- ESP32 não permite mesmo SPI bus com pinos diferentes
+> The following GPIO pins are directly usable:
 
-## Tabela de Referência Rápida
+| Pin   | Location              | Notes                                            |
+|-------|-----------------------|--------------------------------------------------|
+| IO35  | P3 JST connector      | *Input only*, no internal pull-ups               |
+| IO22  | P3 & CN1 JST connectors|                                                  |
+| IO27  | CN1 JST connector     |                                                  |
 
-### Display
+> For additional GPIOs, consider using an SD Card sniffer ([see Add-ons](/ADDONS.md)), or (as a last resort) hardware modifications.
 
-| GPIO | Função | Direção | Observações |
-|------|--------|---------|-------------|
-| 13   | MOSI   | Output  | SPI Data Out |
-| 14   | CLK    | Output  | SPI Clock |
-| 15   | CS     | Output  | Chip Select (Active Low) |
-| 2    | DC     | Output  | Data/Command Select |
-| 4    | RST    | Output  | Reset (Active Low) |
-| 21   | BL     | Output  | Backlight Control |
-| 12   | MISO   | Input   | Não usado neste projeto |
+---
 
-### Touch Screen
+## 🔌 Broken-Out Pinsets
 
-| GPIO | Função | Direção | Observações |
-|------|--------|---------|-------------|
-| 32   | MOSI   | Output  | Software SPI |
-| 25   | CLK    | Output  | Software SPI Clock |
-| 33   | CS     | Output  | Chip Select (Active Low) |
-| 39   | MISO   | Input   | Input-only pad (sem pull-up) |
-| 36   | IRQ    | Input   | Interrupt (opcional, não usado) |
+### P3 (4P 1.25mm JST)
+| Pin   | Usage         | Notes                                         |
+|-------|--------------|-----------------------------------------------|
+| GND   | Ground       |                                               |
+| IO35  | GPIO (in)    | Input only; no internal pull-ups              |
+| IO22  | GPIO         | Also present on **CN1**                       |
+| IO21  | TFT BL       | TFT backlight; not generally usable as GPIO   |
 
-## GPIOs Livres Disponíveis
+---
 
-| GPIO | Tipo | Observações |
-|------|------|-------------|
-| 0    | I/O  | Boot strapping pin (não usar durante boot) |
-| 1    | I/O  | UART TX (pode conflitar com debug) |
-| 3    | I/O  | UART RX (pode conflitar com debug) |
-| 5    | I/O  | Livre |
-| 16   | I/O  | Livre |
-| 17   | I/O  | Livre |
-| 18   | I/O  | Livre |
-| 19   | I/O  | Livre |
-| 22   | I/O  | Livre |
-| 23   | I/O  | Livre |
-| 26   | I/O  | Livre |
-| 27   | I/O  | Livre |
-| 34   | Input | Input-only pad |
-| 35   | Input | Input-only pad |
-| 37   | Input | Input-only pad |
-| 38   | Input | Input-only pad |
+### CN1 (4P 1.25mm JST, I2C-Friendly)
+| Pin   | Usage         | Notes                             |
+|-------|--------------|-----------------------------------|
+| GND   | Ground       |                                   |
+| IO22  | GPIO         | Also present on **P3**             |
+| IO27  | GPIO         |                                   |
+| 3.3V  | Power        |                                   |
 
-## Configurações no Código
+---
 
-### Display Driver (`display_driver.cpp`)
+### P1 (4P 1.25mm JST, Serial)
+| Pin   | Usage       | Notes                                 |
+|-------|------------|---------------------------------------|
+| VIN   | Power In   |                                       |
+| IO1(?)| TX         | Possibly usable as GPIO                |
+| IO3(?)| RX         | Possibly usable as GPIO                |
+| GND   | Ground     |                                       |
 
-```cpp
-constexpr gpio_num_t PIN_NUM_MOSI = GPIO_NUM_13;
-constexpr gpio_num_t PIN_NUM_CLK = GPIO_NUM_14;
-constexpr gpio_num_t PIN_NUM_CS = GPIO_NUM_15;
-constexpr gpio_num_t PIN_NUM_DC = GPIO_NUM_2;
-constexpr gpio_num_t PIN_NUM_RST = GPIO_NUM_4;
-constexpr gpio_num_t PIN_NUM_BK_LIGHT = GPIO_NUM_21;
-constexpr spi_host_device_t LCD_HOST = SPI2_HOST;
-```
+---
 
-### Touch Driver (`display_driver.cpp`)
+## 🔘 Buttons
 
-```cpp
-constexpr gpio_num_t PIN_NUM_TOUCH_MOSI = GPIO_NUM_32;
-constexpr gpio_num_t PIN_NUM_TOUCH_CLK = GPIO_NUM_25;
-constexpr gpio_num_t PIN_NUM_TOUCH_CS = GPIO_NUM_33;
-constexpr gpio_num_t PIN_NUM_TOUCH_MISO = GPIO_NUM_39;
-```
+| Pin  | Usage | Notes                                |
+|------|-------|--------------------------------------|
+| IO0  | BOOT  | Usable as input in firmware/sketches |
 
-## Restrições e Limitações
+---
 
-### Input-Only Pads
-- **GPIO 34, 35, 36, 37, 38, 39**: Não suportam pull-up/pull-down interno
-- **GPIO 39 (MISO Touch)**: Deve ser configurado sem pull-up/pull-down
+## 🔊 Speaker
 
-### Boot Strapping Pins
-- **GPIO 0**: Usado para boot mode selection
-- Não usar durante boot ou configurar com cuidado
+> The speaker connector is **not usable as GPIO**; it is connected to the amplifier.
 
-### SPI Bus Conflicts
-- **SPI1_HOST**: Reservado para flash (não pode ser usado)
-- **SPI2_HOST**: Usado pelo display
-- **Solução**: Touch usa software SPI (bit-banging)
+| Pin  | Usage              | Notes                                            |
+|------|--------------------|--------------------------------------------------|
+| IO26 | Connected to Amp   | See: `i2s_set_dac_mode(I2S_DAC_CHANNEL_LEFT_EN);`|
 
-## Referências
+---
 
-- [HARDWARE.md](HARDWARE.md) - Documentação técnica completa
-- [ESP32-Cheap-Yellow-Display PINS.md](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display/blob/main/PINS.md)
-- [ESP32 GPIO Reference](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/gpio.html)
+## 🌈 RGB LED
 
+> The onboard RGB LED can be repurposed if extra pins are needed.  
+> **Note:** LEDs are "active low" (HIGH=off, LOW=on)
 
+| Pin  | Color  | Notes |
+|------|--------|-------|
+| IO4  | Red    |       |
+| IO16 | Green  |       |
+| IO17 | Blue   |       |
 
+---
 
+## 💾 SD Card (VSPI)
+
+> VSPI is used for SD card. Pin names are predefined in `SPI.h`.
+
+| Pin  | Function | Notes |
+|------|----------|-------|
+| IO5  | SS       |       |
+| IO18 | SCK      |       |
+| IO19 | MISO     |       |
+| IO23 | MOSI     |       |
+
+---
+
+## 🖱️ Touch Screen
+
+| Pin  | Function          |
+|------|-------------------|
+| IO25 | XPT2046_CLK       |
+| IO32 | XPT2046_MOSI      |
+| IO33 | XPT2046_CS        |
+| IO36 | XPT2046_IRQ       |
+| IO39 | XPT2046_MISO      |
+
+---
+
+## 🌞 LDR (Light Sensor)
+
+| Pin  | Usage |
+|------|-------|
+| IO34 | LDR   |
+
+---
+
+## 🖥️ TFT Display (HSPI)
+
+| Pin  | Function   | Notes                     |
+|------|------------|---------------------------|
+| IO2  | TFT_RS     | AKA: TFT_DC               |
+| IO12 | TFT_SDO    | AKA: TFT_MISO             |
+| IO13 | TFT_SDI    | AKA: TFT_MOSI             |
+| IO14 | TFT_SCK    |                           |
+| IO15 | TFT_CS     |                           |
+| IO21 | TFT_BL     | Also on **P3** connector  |
+
+---
+
+## 📍 Test Points
+
+| Pad                        | Function | Notes                       |
+|----------------------------|----------|-----------------------------|
+| S1                         | GND      | Near USB-Serial             |
+| S2                         | 3.3V     | For ESP32                   |
+| S3                         | 5V       | Near USB-Serial             |
+| S4                         | GND      | For ESP32                   |
+| S5                         | 3.3V     | For TFT                     |
+| JP0 (nearest USB socket)   | 5V       | TFT LDO                     |
+| JP0                        | 3.3V     | TFT LDO                     |
+| JP3 (nearest USB socket)   | 5V       | ESP32 LDO                   |
+| JP3                        | 3.3V     | ESP32 LDO                   |
+
+---

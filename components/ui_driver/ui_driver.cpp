@@ -1,6 +1,7 @@
 #include "ui_driver.hpp"
 #include "ui_common.hpp"
 #include "screens/wifi_config_screen.hpp"
+#include "screens/brightness_screen.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -16,6 +17,8 @@
 
 // Declarar fonte Roboto customizada (suporta acentos portugueses)
 LV_FONT_DECLARE(roboto);
+// Declarar fonte Montserrat para ícones (padrão do LVGL)
+LV_FONT_DECLARE(lv_font_montserrat_20);
 
 // Mutex externo do display_driver
 extern SemaphoreHandle_t lvgl_mutex;
@@ -58,6 +61,9 @@ void lvgl_unlock() {
 namespace {
 constexpr char TAG[] = "UI";
 
+// Declaração forward
+static void update_wifi_status_icon();
+
 // Flags de inversão de touch - devem corresponder aos valores em display_driver.cpp
 // IMPORTANTE: Se mudar aqui, também mudar em display_driver.cpp
 constexpr bool TOUCH_INVERT_X = true;    // X precisa ser invertido
@@ -70,6 +76,7 @@ enum class AppState {
     THANK_YOU,     // Mostrando agradecimento
     CONFIGURATION, // Tela de configurações
     WIFI_CONFIG,   // Tela de configuração WiFi
+    BRIGHTNESS_CONFIG, // Tela de configuração de brilho
 };
 
 AppState current_state = AppState::CALIBRATION;
@@ -222,6 +229,7 @@ static void config_back_button_cb(lv_event_t *e) {
         show_question_screen();
     }
 }
+
 
 static void update_calibration_ui() {
     if (calibration_label == nullptr || calibration_target == nullptr) {
@@ -502,15 +510,67 @@ void create_question_screen() {
     ESP_LOGI(TAG, "Tela carregada");
     
     lv_obj_remove_style_all(question_screen);
-    lv_obj_set_style_bg_color(question_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
-    lv_obj_set_style_bg_opa(question_screen, LV_OPA_COVER, 0);
-    // Não definir tamanho/posição - screens sempre ocupam toda a tela
-    lv_obj_clear_flag(question_screen, LV_OBJ_FLAG_SCROLLABLE);
+    ui::common::apply_screen_style(question_screen);
     // Garantir que a tela não bloqueie eventos (deixar eventos passarem para os filhos)
     lv_obj_clear_flag(question_screen, LV_OBJ_FLAG_CLICKABLE);
     ESP_LOGI(TAG, "Estilos da tela configurados");
     
-    // Título simples no topo
+    // Header Container (Barra de status)
+    lv_obj_t* header = lv_obj_create(question_screen);
+    lv_obj_set_size(header, LV_PCT(100), 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(header, 0, 0); // Sem borda padrão
+    lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(header, 1, 0);
+    lv_obj_set_style_border_color(header, lv_color_hex(0xEEEEEE), 0);
+    lv_obj_set_style_radius(header, 0, 0);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Ícone de status WiFi (dentro do header, à esquerda)
+    if (wifi_status_icon != nullptr) {
+        lv_obj_del(wifi_status_icon);
+        wifi_status_icon = nullptr;
+    }
+    // Botão do WiFi (pode ser clicável para abrir config direta no futuro se desejar)
+    wifi_status_icon = lv_button_create(header);
+    lv_obj_remove_style_all(wifi_status_icon);
+    lv_obj_set_size(wifi_status_icon, 32, 32);
+    lv_obj_align(wifi_status_icon, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_set_style_bg_opa(wifi_status_icon, LV_OPA_TRANSP, 0); // Transparente
+    lv_obj_clear_flag(wifi_status_icon, LV_OBJ_FLAG_CLICKABLE); // Por enquanto não clicável
+
+    // Label com o símbolo WiFi
+    lv_obj_t *wifi_label = lv_label_create(wifi_status_icon);
+    lv_label_set_text(wifi_label, LV_SYMBOL_WIFI);
+    lv_obj_center(wifi_label);
+    // Usar fonte Montserrat para ícones
+    lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_20, 0);
+    // Cor inicial: cinza claro (indefinido) ou vermelho (desconectado)
+    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0x9E9E9E), 0);
+
+    // Botão de Configurações (dentro do header, à direita)
+    if (settings_button != nullptr) {
+        lv_obj_del(settings_button);
+        settings_button = nullptr;
+    }
+    settings_button = lv_button_create(header);
+    lv_obj_set_size(settings_button, 32, 32);
+    lv_obj_align(settings_button, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_set_style_bg_opa(settings_button, LV_OPA_TRANSP, 0); // Transparente
+    lv_obj_set_style_shadow_width(settings_button, 0, 0); // Sem sombra
+    
+    lv_obj_t *settings_label = lv_label_create(settings_button);
+    lv_label_set_text(settings_label, LV_SYMBOL_SETTINGS);
+    lv_obj_center(settings_label);
+    // Usar fonte Montserrat para ícones
+    lv_obj_set_style_text_font(settings_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(settings_label, ui::common::COLOR_SETTINGS_BUTTON(), 0); // Cor original
+    
+    lv_obj_add_event_cb(settings_button, settings_button_cb, LV_EVENT_CLICKED, nullptr);
+    
+    // Título simples no topo (agora abaixo do header)
     ESP_LOGI(TAG, "Criando label...");
     question_label = lv_label_create(question_screen);
     lv_label_set_text(question_label, "Como você se sentiu hoje?");
@@ -523,56 +583,9 @@ void create_question_screen() {
     // Adicionar padding vertical ao label para evitar corte do texto
     lv_obj_set_style_pad_top(question_label, 4, 0);
     lv_obj_set_style_pad_bottom(question_label, 4, 0);
-    // Mover texto mais para baixo para dar espaço ao botão de configurações (32px altura + 8px top = 40px, usar 55px)
-    lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, 55);
+    // Mover texto mais para baixo para dar espaço ao header
+    lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, 60);
 
-    // Botão pequeno de configurações no canto superior direito
-    if (settings_button != nullptr) {
-        lv_obj_del(settings_button);
-        settings_button = nullptr;
-    }
-    settings_button = lv_button_create(question_screen);
-    lv_obj_remove_style_all(settings_button);
-    lv_obj_set_size(settings_button, 32, 32);
-    lv_obj_set_pos(settings_button, 280, 8);
-    lv_obj_set_style_bg_color(settings_button, lv_color_hex(0x607D8B), 0);
-    lv_obj_set_style_bg_opa(settings_button, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(settings_button, 16, 0);
-    lv_obj_set_style_border_width(settings_button, 0, 0);
-    lv_obj_add_event_cb(settings_button, settings_button_cb, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *settings_label = lv_label_create(settings_button);
-    lv_label_set_text(settings_label, LV_SYMBOL_SETTINGS);
-    lv_obj_center(settings_label);
-    lv_obj_set_style_text_color(settings_label, lv_color_white(), 0);
-    // Adicionar padding ao botão de configurações para evitar corte
-    lv_obj_set_style_pad_all(settings_button, 4, 0);
-    
-    // Ícone de status WiFi no canto superior esquerdo
-    if (wifi_status_icon != nullptr) {
-        lv_obj_del(wifi_status_icon);
-        wifi_status_icon = nullptr;
-    }
-    // Criar ícone WiFi como um botão circular (similar ao botão de configurações)
-    wifi_status_icon = lv_button_create(question_screen);
-    lv_obj_remove_style_all(wifi_status_icon);
-    lv_obj_set_size(wifi_status_icon, 24, 24);
-    lv_obj_set_pos(wifi_status_icon, 8, 8);
-    lv_obj_set_style_bg_color(wifi_status_icon, lv_color_hex(0xFFFFFF), 0); // Fundo branco
-    lv_obj_set_style_bg_opa(wifi_status_icon, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(wifi_status_icon, 12, 0); // Círculo
-    lv_obj_set_style_border_width(wifi_status_icon, 0, 0);
-    lv_obj_clear_flag(wifi_status_icon, LV_OBJ_FLAG_CLICKABLE); // Não clicável
-    
-    // Criar label dentro do botão com o símbolo WiFi
-    lv_obj_t *wifi_label = lv_label_create(wifi_status_icon);
-    lv_label_set_text(wifi_label, LV_SYMBOL_WIFI);
-    lv_obj_center(wifi_label);
-    lv_obj_set_style_text_font(wifi_label, TITLE_FONT, 0);
-    // Cor inicial: vermelho (desconectado) - será atualizada pelo update() depois
-    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0xFF0000), 0);
-    lv_obj_set_style_pad_all(wifi_status_icon, 2, 0);
-    
     // Botões posicionados manualmente - layout simples e direto
     // 5 botões de 50px cada = 250px
     // Espaço disponível: 320px - 20px (margens) = 300px
@@ -583,7 +596,7 @@ void create_question_screen() {
     // Total de largura: 5 * BTN_SIZE + 4 * BTN_SPACING = 250 + 48 = 298px
     // Posição inicial: (320 - 298) / 2 = 11px
     constexpr int BTN_START_X = 11;
-    constexpr int BTN_Y = 120; // Centro vertical aproximado
+    constexpr int BTN_Y = 140; // Um pouco mais baixo para dar espaço ao texto
     
     ESP_LOGI(TAG, "Criando %d botões...", 5);
     ESP_LOGI(TAG, "Botões: tamanho=%d, espaçamento=%d, start_x=%d, y=%d", 
@@ -726,80 +739,127 @@ void create_configuration_screen() {
     
     configuration_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(configuration_screen);
-    lv_obj_set_style_bg_color(configuration_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
+    lv_obj_set_style_bg_color(configuration_screen, lv_color_hex(0xF5F5F5), 0); // Fundo cinza muito claro
     lv_obj_set_style_bg_opa(configuration_screen, LV_OPA_COVER, 0);
     lv_obj_clear_flag(configuration_screen, LV_OBJ_FLAG_SCROLLABLE);
     
+    // Container principal com layout flex
+    lv_obj_t *main_cont = lv_obj_create(configuration_screen);
+    lv_obj_remove_style_all(main_cont);
+    lv_obj_set_size(main_cont, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(main_cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(main_cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(main_cont, 10, 0);
+    lv_obj_set_style_pad_row(main_cont, 10, 0);
+
     // Título
-    lv_obj_t *title_label = lv_label_create(configuration_screen);
+    lv_obj_t *title_label = lv_label_create(main_cont);
     lv_label_set_text(title_label, "Configurações");
     lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label, lv_color_hex(0x000000), 0); // Texto preto
+    lv_obj_set_style_text_color(title_label, lv_color_hex(0x333333), 0);
     lv_obj_set_style_text_font(title_label, TITLE_FONT, 0);
-    // Adicionar padding vertical ao label para evitar corte do texto
-    lv_obj_set_style_pad_top(title_label, 4, 0);
-    lv_obj_set_style_pad_bottom(title_label, 4, 0);
-    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 20);
     
-    // Botão de WiFi
-    lv_obj_t *wifi_button = lv_button_create(configuration_screen);
-    lv_obj_set_size(wifi_button, 200, 45);
-    lv_obj_align(wifi_button, LV_ALIGN_CENTER, 0, -35);
-    
-    lv_obj_set_style_bg_color(wifi_button, lv_color_hex(0x2196F3), 0);
-    lv_obj_set_style_bg_opa(wifi_button, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(wifi_button, lv_color_white(), 0);
-    lv_obj_set_style_radius(wifi_button, 16, 0);
-    lv_obj_set_style_pad_all(wifi_button, 4, 0);
-    
-    lv_obj_t *wifi_label = lv_label_create(wifi_button);
-    lv_label_set_text(wifi_label, "WiFi");
-    lv_obj_center(wifi_label);
-    lv_obj_set_style_text_font(wifi_label, TEXT_FONT, 0);
-    
-    lv_obj_add_event_cb(wifi_button, [](lv_event_t *e) {
+    // Container para os ícones (Grid horizontal)
+    lv_obj_t *icons_cont = lv_obj_create(main_cont);
+    lv_obj_remove_style_all(icons_cont);
+    lv_obj_set_width(icons_cont, LV_PCT(100));
+    lv_obj_set_flex_grow(icons_cont, 1); // Ocupar espaço disponível verticalmente
+    lv_obj_set_flex_flow(icons_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(icons_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_ver(icons_cont, 5, 0);
+
+    // Estilo para botões de ícone (cards quadrados)
+    static lv_style_t style_icon_btn;
+    static bool style_icon_init = false;
+    if (!style_icon_init) {
+        lv_style_init(&style_icon_btn);
+        lv_style_set_width(&style_icon_btn, 85); // Cabem 3 em 320px com espaço (85*3 = 255)
+        lv_style_set_height(&style_icon_btn, 85);
+        lv_style_set_bg_color(&style_icon_btn, lv_color_white());
+        lv_style_set_bg_opa(&style_icon_btn, LV_OPA_COVER);
+        lv_style_set_radius(&style_icon_btn, 12);
+        lv_style_set_shadow_width(&style_icon_btn, 15);
+        lv_style_set_shadow_color(&style_icon_btn, lv_color_hex(0x000000));
+        lv_style_set_shadow_opa(&style_icon_btn, 20); // Suave
+        lv_style_set_shadow_offset_y(&style_icon_btn, 4);
+        
+        // Layout interno: Flex Column (Ícone em cima, Texto embaixo)
+        lv_style_set_layout(&style_icon_btn, LV_LAYOUT_FLEX);
+        lv_style_set_flex_flow(&style_icon_btn, LV_FLEX_FLOW_COLUMN);
+        lv_style_set_flex_main_place(&style_icon_btn, LV_FLEX_ALIGN_CENTER);
+        lv_style_set_flex_cross_place(&style_icon_btn, LV_FLEX_ALIGN_CENTER);
+        lv_style_set_pad_all(&style_icon_btn, 5);
+        lv_style_set_pad_row(&style_icon_btn, 5);
+        
+        style_icon_init = true;
+    }
+
+    // Helper lambda para criar botão de ícone
+    auto create_icon_btn = [&](lv_obj_t *parent, const char* icon, const char* text, lv_color_t icon_color, lv_event_cb_t cb) {
+        lv_obj_t *btn = lv_button_create(parent);
+        lv_obj_add_style(btn, &style_icon_btn, 0);
+        
+        // Efeito de clique
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF0F0F0), LV_STATE_PRESSED);
+        // Leve deslocamento ao clicar para efeito tátil
+        lv_obj_set_style_translate_y(btn, 2, LV_STATE_PRESSED);
+
+        // Ícone grande
+        lv_obj_t *lbl_icon = lv_label_create(btn);
+        lv_label_set_text(lbl_icon, icon);
+        lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_20, 0); // Se tiver 24 ou 28 seria melhor, mas 20 ok
+        // Escalar o ícone se possível ou apenas mudar cor
+        lv_obj_set_style_text_color(lbl_icon, icon_color, 0);
+        // Aumentar escala do ícone via transform se fonte for pequena (opcional, lvgl 8/9 suporta)
+        // lv_obj_set_style_transform_zoom(lbl_icon, 384, 0); // 1.5x (256 = 1x)
+
+        // Texto
+        lv_obj_t *lbl_text = lv_label_create(btn);
+        lv_label_set_text(lbl_text, text);
+        lv_obj_set_style_text_font(lbl_text, TEXT_FONT, 0);
+        lv_obj_set_style_text_color(lbl_text, lv_color_hex(0x555555), 0);
+        lv_obj_set_style_text_align(lbl_text, LV_TEXT_ALIGN_CENTER, 0);
+
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+        return btn;
+    };
+
+    // Botão WiFi
+    create_icon_btn(icons_cont, LV_SYMBOL_WIFI, "WiFi", lv_color_hex(0x2196F3), [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
             ESP_LOGI(TAG, "Abrindo configuração WiFi...");
             current_state = AppState::WIFI_CONFIG;
             ui::screens::on_back_callback = show_configuration_screen;
             ui::screens::show_wifi_config_screen();
         }
-    }, LV_EVENT_CLICKED, nullptr);
+    });
     
-    // Botão de calibração
-    config_calibrate_button = lv_button_create(configuration_screen);
-    lv_obj_set_size(config_calibrate_button, 200, 45);
-    lv_obj_align(config_calibrate_button, LV_ALIGN_CENTER, 0, 20);
+    // Botão Brilho
+    create_icon_btn(icons_cont, LV_SYMBOL_EYE_OPEN, "Brilho", lv_color_hex(0xFFC107), [](lv_event_t *e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            ESP_LOGI(TAG, "Abrindo configuração de brilho...");
+            current_state = AppState::BRIGHTNESS_CONFIG;
+            ui::screens::brightness_on_back_callback = show_configuration_screen;
+            ui::screens::show_brightness_screen();
+        }
+    });
     
-    lv_obj_set_style_bg_color(config_calibrate_button, lv_color_hex(0x2196F3), 0);
-    lv_obj_set_style_bg_opa(config_calibrate_button, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(config_calibrate_button, lv_color_white(), 0);
-    lv_obj_set_style_radius(config_calibrate_button, 16, 0);
-    lv_obj_set_style_pad_all(config_calibrate_button, 4, 0);
-    
-    lv_obj_t *calib_label = lv_label_create(config_calibrate_button);
-    lv_label_set_text(calib_label, "Calibrar Tela");
-    lv_obj_center(calib_label);
-    lv_obj_set_style_text_font(calib_label, TEXT_FONT, 0);
-    
-    lv_obj_add_event_cb(config_calibrate_button, config_calibrate_button_cb, LV_EVENT_CLICKED, nullptr);
-    
+    // Botão Calibração
+    create_icon_btn(icons_cont, LV_SYMBOL_SETTINGS, "Calibrar", lv_color_hex(0x607D8B), config_calibrate_button_cb);
+
     // Botão de voltar
-    lv_obj_t *back_button = lv_button_create(configuration_screen);
-    lv_obj_set_size(back_button, 150, 44);
-    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -16);
-    
-    lv_obj_set_style_bg_color(back_button, lv_color_hex(0x757575), 0);
+    lv_obj_t *back_button = lv_button_create(main_cont);
+    lv_obj_set_size(back_button, LV_PCT(50), 40);
+    lv_obj_set_style_bg_color(back_button, lv_color_hex(0xF44336), 0); // Vermelho suave
     lv_obj_set_style_bg_opa(back_button, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(back_button, lv_color_white(), 0);
-    lv_obj_set_style_radius(back_button, 16, 0);
+    lv_obj_set_style_radius(back_button, 20, 0);
+    lv_obj_set_style_shadow_width(back_button, 0, 0);
     
     lv_obj_t *back_label = lv_label_create(back_button);
     lv_label_set_text(back_label, "Voltar");
     lv_obj_center(back_label);
     lv_obj_set_style_text_font(back_label, TEXT_FONT, 0);
-    // Adicionar padding ao botão para evitar corte do texto
-    lv_obj_set_style_pad_all(back_button, 4, 0);
+    lv_obj_set_style_text_color(back_label, lv_color_white(), 0);
     
     lv_obj_add_event_cb(back_button, config_back_button_cb, LV_EVENT_CLICKED, nullptr);
 }
@@ -809,9 +869,13 @@ void show_configuration_screen() {
     
     lvgl_lock();
     
-    if (configuration_screen == nullptr) {
-        create_configuration_screen();
+    // Sempre recriar a tela para garantir que os valores estejam atualizados
+    if (configuration_screen != nullptr) {
+        lv_obj_del(configuration_screen);
+        configuration_screen = nullptr;
     }
+    
+    create_configuration_screen();
     
     lv_screen_load(configuration_screen);
     // Invalidar a tela para forçar refresh no próximo ciclo do timer handler
@@ -915,6 +979,7 @@ void update() {
         wifi_update_counter = 0;
         update_wifi_status_icon();
     }
+    
 }
 
 } // namespace

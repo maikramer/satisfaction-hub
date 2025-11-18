@@ -1,6 +1,10 @@
 #include "display_driver.hpp"
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_ili9341.h"
@@ -15,6 +19,9 @@
 #include "lvgl.h"
 #include <new>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
 
 namespace {
 constexpr char TAG[] = "DisplayDriver";
@@ -29,6 +36,7 @@ constexpr gpio_num_t PIN_NUM_DC = GPIO_NUM_2;         // TFT_RS/TFT_DC - IO2
 constexpr gpio_num_t PIN_NUM_RST = GPIO_NUM_4;        // Reset (não especificado na doc, mas comum)
 constexpr gpio_num_t PIN_NUM_BK_LIGHT = GPIO_NUM_21;  // TFT_BL (Backlight) - IO21
 constexpr gpio_num_t PIN_NUM_MISO = GPIO_NUM_12;      // TFT_SDO (TFT_MISO) - IO12 (para display, mas não usado)
+constexpr gpio_num_t PIN_NUM_LDR = GPIO_NUM_34;       // LDR (Light Sensor) - IO34 (Input only, ADC1_CH6)
 
 // Pinos do touch screen XPT2046 conforme documentação oficial
 // Touch usa pinos diferentes do display (não compartilha SPI)
@@ -49,6 +57,21 @@ constexpr bool TOUCH_INVERT_X = true;   // X precisa ser invertido
 constexpr bool TOUCH_INVERT_Y = true;   // Touch está invertido em Y - valores maiores = topo
 constexpr char TOUCH_CALIB_NVS_NAMESPACE[] = "touch_cal";
 constexpr char TOUCH_CALIB_NVS_KEY[] = "cal";
+
+// Configuração LEDC para PWM do backlight
+constexpr ledc_timer_t LEDC_TIMER = LEDC_TIMER_0;
+constexpr ledc_mode_t LEDC_MODE = LEDC_LOW_SPEED_MODE;
+constexpr ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_0;
+constexpr uint32_t LEDC_FREQUENCY = 5000;  // 5 kHz (frequência adequada para backlight)
+constexpr ledc_timer_bit_t LEDC_RESOLUTION = LEDC_TIMER_8_BIT;  // 0-255 (8 bits)
+constexpr uint32_t LEDC_MAX_DUTY = (1 << 8) - 1;  // 255
+
+// Configuração ADC para LDR
+constexpr adc_unit_t ADC_UNIT = ADC_UNIT_1;
+constexpr adc_channel_t ADC_LDR_CHANNEL = ADC_CHANNEL_6;  // GPIO34 = ADC1_CH6
+constexpr adc_atten_t ADC_ATTEN = ADC_ATTEN_DB_12;  // 0-3.3V (DB_12 no ESP-IDF v6.0)
+constexpr adc_bitwidth_t ADC_BITWIDTH = ADC_BITWIDTH_12;  // 12 bits
+constexpr uint32_t BRIGHTNESS_UPDATE_INTERVAL_MS = 500;  // Atualizar brilho a cada 500ms
 } // namespace
 
 // Mutex para proteger acesso ao LVGL (substitui lvgl_port_lock) - precisa estar fora do namespace
@@ -112,7 +135,6 @@ void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
     
     int32_t width = x2 - x1 + 1;
     int32_t height = y2 - y1 + 1;
-    int32_t pixel_count = width * height;
     
     // Log mais frequente para debug inicial
     if (flush_count <= 20 || flush_count % 50 == 0) {
@@ -157,6 +179,10 @@ esp_err_t DisplayDriver::init() {
     ESP_LOGI(TAG, "  SPI Host: SPI2 (VSPI) - pinos remapeados para HSPI (SPI1 em uso pela flash)");
 
     ESP_RETURN_ON_ERROR(init_backlight(), TAG, "Backlight init failed");
+    ESP_RETURN_ON_ERROR(init_ldr(), TAG, "LDR init failed");
+    
+    // Carregar configurações de brilho do NVS
+    load_brightness_settings();
     
     // Tentar inicializar SPI para display primeiro
     esp_err_t spi_err = init_spi_bus();
@@ -178,6 +204,25 @@ esp_err_t DisplayDriver::init() {
     // Adicionar touch ao LVGL
     ESP_RETURN_ON_ERROR(add_touch_to_lvgl(), TAG, "LVGL touch registration failed");
 
+    // Criar task para atualizar brilho automaticamente
+    TaskHandle_t created_task_handle = nullptr;
+    BaseType_t task_result = xTaskCreatePinnedToCore(
+        brightness_update_task,
+        "brightness_task",
+        2048,  // Stack size
+        this,
+        1,     // Priority
+        &created_task_handle,
+        1      // Core 1
+    );
+    
+    if (task_result != pdPASS) {
+        ESP_LOGE(TAG, "Falha ao criar task de brilho");
+        return ESP_FAIL;
+    }
+    brightness_task_handle_ = created_task_handle;
+    ESP_LOGI(TAG, "Task de brilho criada com sucesso");
+
     initialized_ = true;
     ESP_LOGI(TAG, "Display driver inicializado com sucesso");
     return ESP_OK;
@@ -188,15 +233,90 @@ lv_display_t *DisplayDriver::lvgl_display() const {
 }
 
 esp_err_t DisplayDriver::init_backlight() {
-    gpio_config_t bk_gpio_config = {
-        .pin_bit_mask = 1ULL << PIN_NUM_BK_LIGHT,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&bk_gpio_config), TAG, "Backlight gpio config failed");
-    gpio_set_level(PIN_NUM_BK_LIGHT, 1);
+    ESP_LOGI(TAG, "Inicializando backlight com PWM (LEDC)...");
+    
+    // Configurar timer LEDC
+    ledc_timer_config_t ledc_timer = {};
+    ledc_timer.speed_mode = LEDC_MODE;
+    ledc_timer.duty_resolution = LEDC_RESOLUTION;
+    ledc_timer.timer_num = LEDC_TIMER;
+    ledc_timer.freq_hz = LEDC_FREQUENCY;
+    ledc_timer.clk_cfg = LEDC_AUTO_CLK;
+    ESP_RETURN_ON_ERROR(ledc_timer_config(&ledc_timer), TAG, "LEDC timer config failed");
+    
+    // Configurar canal LEDC
+    ledc_channel_config_t ledc_channel = {};
+    ledc_channel.channel = LEDC_CHANNEL;
+    ledc_channel.duty = 0;
+    ledc_channel.gpio_num = PIN_NUM_BK_LIGHT;
+    ledc_channel.speed_mode = LEDC_MODE;
+    ledc_channel.timer_sel = LEDC_TIMER;
+    ledc_channel.hpoint = 0;
+    ESP_RETURN_ON_ERROR(ledc_channel_config(&ledc_channel), TAG, "LEDC channel config failed");
+    
+    // Definir brilho inicial (50%)
+    current_brightness_ = 50;
+    set_brightness(current_brightness_);
+    
+    ESP_LOGI(TAG, "Backlight PWM inicializado (freq: %d Hz, resolução: %d bits)", 
+             LEDC_FREQUENCY, LEDC_RESOLUTION);
+    return ESP_OK;
+}
+
+esp_err_t DisplayDriver::init_ldr() {
+    ESP_LOGI(TAG, "Inicializando sensor LDR (GPIO %d, ADC1_CH6)...", PIN_NUM_LDR);
+    
+    // Configurar GPIO34 como input (necessário antes de usar ADC)
+    // OBS: Para ADC, geralmente não configuramos como GPIO digital input, pois isso ativa o buffer digital.
+    // O driver ADC cuida da configuração do pino. Configurar como GPIO input pode causar conflitos ou leitura incorreta.
+    // Removendo configuração explícita de GPIO para ver se resolve o problema de leitura 0.
+    /*
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = (1ULL << PIN_NUM_LDR);
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "GPIO config failed");
+    ESP_LOGI(TAG, "GPIO %d configurado como input", PIN_NUM_LDR);
+    */
+    
+    // Configurar ADC oneshot
+    adc_oneshot_unit_init_cfg_t init_config = {};
+    init_config.unit_id = ADC_UNIT;
+    init_config.clk_src = ADC_RTC_CLK_SRC_DEFAULT;
+    init_config.ulp_mode = ADC_ULP_MODE_DISABLE;
+    ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&init_config, &this->adc1_handle_), TAG, "ADC oneshot unit init failed");
+    ESP_LOGI(TAG, "ADC oneshot unit criado (unit_id=%d)", ADC_UNIT);
+    
+    // Configurar canal do ADC
+    adc_oneshot_chan_cfg_t channel_config = {};
+    channel_config.bitwidth = ADC_BITWIDTH;
+    channel_config.atten = ADC_ATTEN;
+    ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(this->adc1_handle_, ADC_LDR_CHANNEL, &channel_config), 
+                        TAG, "ADC channel config failed");
+    ESP_LOGI(TAG, "ADC channel %d configurado (bitwidth=%d, atten=%d, gpio=%d)", 
+             ADC_LDR_CHANNEL, ADC_BITWIDTH, ADC_ATTEN, PIN_NUM_LDR);
+    
+    // Aguardar um pouco para estabilizar
+    vTaskDelay(pdMS_TO_TICKS(200));
+    
+    // Fazer múltiplas leituras para verificar
+    int adc_raw = 0;
+    ESP_LOGI(TAG, "Fazendo leituras iniciais do LDR...");
+    for (int i = 0; i < 10; i++) {
+        esp_err_t ret = adc_oneshot_read(this->adc1_handle_, ADC_LDR_CHANNEL, &adc_raw);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Erro ao ler LDR (tentativa %d): %s", i+1, esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Leitura %d: %d", i+1, adc_raw);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    // Usar a última leitura válida
+    last_ldr_value_ = static_cast<uint16_t>(adc_raw);
+    
     return ESP_OK;
 }
 
@@ -615,5 +735,203 @@ void DisplayDriver::lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         }
         last_state = LV_INDEV_STATE_RELEASED;
     }
+}
+
+esp_err_t DisplayDriver::set_brightness(uint8_t brightness) {
+    // Limitar brilho entre MIN_BRIGHTNESS e MAX_BRIGHTNESS
+    if (brightness < MIN_BRIGHTNESS) brightness = MIN_BRIGHTNESS;
+    if (brightness > MAX_BRIGHTNESS) brightness = MAX_BRIGHTNESS;
+    
+    // Converter porcentagem (0-100) para duty cycle (0-255)
+    uint32_t duty = (brightness * LEDC_MAX_DUTY) / 100;
+    
+    // Aplicar duty cycle no LEDC
+    esp_err_t ret = ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao definir duty cycle: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ret = ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao atualizar duty cycle: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    current_brightness_ = brightness;
+    
+    // Se não estiver em modo automático, atualizar brilho manual também
+    if (!auto_brightness_enabled_) {
+        manual_brightness_ = brightness;
+    }
+    
+    ESP_LOGD(TAG, "Brilho definido para %d%% (duty: %lu)", brightness, duty);
+    
+    return ESP_OK;
+}
+
+esp_err_t DisplayDriver::set_auto_brightness(bool enabled) {
+    auto_brightness_enabled_ = enabled;
+    
+    if (!enabled) {
+        // Ao desabilitar automático, usar brilho manual salvo
+        set_brightness(manual_brightness_);
+        ESP_LOGI(TAG, "Brilho automático desabilitado. Brilho manual: %d%%", manual_brightness_);
+    } else {
+        ESP_LOGI(TAG, "Brilho automático habilitado");
+        // Atualizar imediatamente quando habilitar automático
+        update_auto_brightness();
+    }
+    
+    // Salvar configuração
+    save_brightness_settings();
+    
+    return ESP_OK;
+}
+
+void DisplayDriver::brightness_update_task(void *pvParameters) {
+    DisplayDriver *driver = static_cast<DisplayDriver *>(pvParameters);
+    if (driver == nullptr) {
+        ESP_LOGE(TAG, "brightness_update_task: driver é nullptr");
+        vTaskDelete(nullptr);
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Task de atualização de brilho iniciada");
+    
+    while (true) {
+        if (driver->auto_brightness_enabled_) {
+            driver->update_auto_brightness();
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(BRIGHTNESS_UPDATE_INTERVAL_MS));
+    }
+}
+
+void DisplayDriver::update_auto_brightness() {
+    if (this->adc1_handle_ == nullptr) {
+        ESP_LOGW(TAG, "ADC não inicializado");
+        return;
+    }
+    
+    // Ler valor do LDR
+    int adc_raw = 0;
+    esp_err_t ret = adc_oneshot_read(this->adc1_handle_, ADC_LDR_CHANNEL, &adc_raw);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Erro ao ler LDR: %s (ret=%d)", esp_err_to_name(ret), ret);
+        return;
+    }
+    
+    // Log periódico para debug (a cada 10 leituras = ~5 segundos)
+    static int read_count = 0;
+    read_count++;
+    if (read_count % 10 == 0) {
+        ESP_LOGI(TAG, "LDR leitura: %d (raw=%d)", static_cast<uint16_t>(adc_raw), adc_raw);
+    }
+    
+    last_ldr_value_ = static_cast<uint16_t>(adc_raw);
+    
+    // Mapear valor do LDR (0-4095) para brilho (MIN_BRIGHTNESS-MAX_BRIGHTNESS)
+    // Usar função exponencial para melhor percepção visual
+    // LDR alto (claro) = brilho alto, LDR baixo (escuro) = brilho baixo
+    
+    // Normalizar LDR para 0.0-1.0
+    float ldr_normalized = static_cast<float>(last_ldr_value_ - LDR_MIN) / 
+                           static_cast<float>(LDR_MAX - LDR_MIN);
+    
+    // Aplicar curva exponencial (gamma ~2.2) para melhor percepção visual
+    // Isso faz com que mudanças pequenas em ambientes escuros sejam mais perceptíveis
+    float gamma = 2.2f;
+    float ldr_gamma = powf(ldr_normalized, 1.0f / gamma);
+    
+    // Mapear para faixa de brilho
+    uint8_t new_brightness = static_cast<uint8_t>(
+        MIN_BRIGHTNESS + (ldr_gamma * (MAX_BRIGHTNESS - MIN_BRIGHTNESS))
+    );
+    
+    // Aplicar suavização para evitar mudanças bruscas
+    // Usar média ponderada: 70% novo valor, 30% valor atual
+    new_brightness = static_cast<uint8_t>((new_brightness * 7 + current_brightness_ * 3) / 10);
+    
+    // Aplicar brilho apenas se mudou significativamente (evitar oscilações)
+    if (abs(static_cast<int>(new_brightness) - static_cast<int>(current_brightness_)) >= 2) {
+        set_brightness(new_brightness);
+        ESP_LOGD(TAG, "Brilho automático: LDR=%d -> %d%%", last_ldr_value_, new_brightness);
+    }
+}
+
+void DisplayDriver::load_brightness_settings() {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(BRIGHTNESS_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG, "Nenhuma configuração de brilho salva, usando padrões");
+        return;
+    }
+    
+    // Carregar modo automático
+    uint8_t auto_enabled = 1;  // Padrão: habilitado
+    size_t required_size = sizeof(auto_enabled);
+    err = nvs_get_blob(handle, BRIGHTNESS_NVS_KEY_AUTO, &auto_enabled, &required_size);
+    if (err == ESP_OK && required_size == sizeof(auto_enabled)) {
+        auto_brightness_enabled_ = (auto_enabled != 0);
+    }
+    
+    // Carregar brilho manual
+    required_size = sizeof(manual_brightness_);
+    err = nvs_get_blob(handle, BRIGHTNESS_NVS_KEY_MANUAL, &manual_brightness_, &required_size);
+    if (err == ESP_OK && required_size == sizeof(manual_brightness_)) {
+        // Validar valor
+        if (manual_brightness_ > MAX_BRIGHTNESS) {
+            manual_brightness_ = MAX_BRIGHTNESS;
+        }
+        if (manual_brightness_ < MIN_BRIGHTNESS) {
+            manual_brightness_ = MIN_BRIGHTNESS;
+        }
+    } else {
+        manual_brightness_ = 50;  // Padrão: 50%
+    }
+    
+    nvs_close(handle);
+    
+    // Aplicar configurações carregadas
+    if (auto_brightness_enabled_) {
+        ESP_LOGI(TAG, "Configuração carregada: Brilho automático habilitado");
+    } else {
+        ESP_LOGI(TAG, "Configuração carregada: Brilho manual %d%%", manual_brightness_);
+        set_brightness(manual_brightness_);
+    }
+}
+
+void DisplayDriver::save_brightness_settings() {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(BRIGHTNESS_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Não foi possível abrir NVS para salvar configurações de brilho");
+        return;
+    }
+    
+    // Salvar modo automático
+    uint8_t auto_enabled = auto_brightness_enabled_ ? 1 : 0;
+    err = nvs_set_blob(handle, BRIGHTNESS_NVS_KEY_AUTO, &auto_enabled, sizeof(auto_enabled));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao salvar modo automático: %s", esp_err_to_name(err));
+    }
+    
+    // Salvar brilho manual atual se não estiver em modo automático
+    if (!auto_brightness_enabled_) {
+        manual_brightness_ = current_brightness_;
+    }
+    err = nvs_set_blob(handle, BRIGHTNESS_NVS_KEY_MANUAL, &manual_brightness_, sizeof(manual_brightness_));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao salvar brilho manual: %s", esp_err_to_name(err));
+    }
+    
+    err = nvs_commit(handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao commitar configurações de brilho: %s", esp_err_to_name(err));
+    }
+    
+    nvs_close(handle);
+    ESP_LOGD(TAG, "Configurações de brilho salvas");
 }
 

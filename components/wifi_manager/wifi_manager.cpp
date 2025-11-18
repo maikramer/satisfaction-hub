@@ -139,7 +139,20 @@ esp_err_t WiFiManager::init() {
         ESP_LOGI(TAG, "esp_netif inicializado");
     }
     
-    // Criar interface de rede WiFi STA - só uma vez
+    // Criar event loop - só uma vez (deve ser criado antes de inicializar WiFi)
+    if (!s_event_loop_created) {
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        s_event_loop_created = true;
+        ESP_LOGI(TAG, "Event loop criado");
+    }
+    
+    // Inicializar WiFi ANTES de criar a interface de rede
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_LOGI(TAG, "WiFi inicializado");
+    
+    // Criar interface de rede WiFi STA - só uma vez (deve ser criada após esp_wifi_init)
     esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (sta_netif == nullptr) {
         sta_netif = esp_netif_create_default_wifi_sta();
@@ -152,13 +165,6 @@ esp_err_t WiFiManager::init() {
         ESP_LOGI(TAG, "Interface WiFi STA já existe, reutilizando");
     }
     
-    // Criar event loop - só uma vez
-    if (!s_event_loop_created) {
-        ESP_ERROR_CHECK(esp_event_loop_create_default());
-        s_event_loop_created = true;
-        ESP_LOGI(TAG, "Event loop criado");
-    }
-    
     // Registrar event handlers (podem ser registrados múltiplas vezes, mas vamos evitar)
     static bool handlers_registered = false;
     if (!handlers_registered) {
@@ -169,11 +175,6 @@ esp_err_t WiFiManager::init() {
         handlers_registered = true;
         ESP_LOGI(TAG, "Event handlers registrados");
     }
-    
-    // Inicializar WiFi
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     
     initialized_ = true;
     ESP_LOGI(TAG, "WiFi Manager inicializado");
