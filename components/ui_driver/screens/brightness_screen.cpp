@@ -147,27 +147,22 @@ void show_brightness_screen() {
     lv_obj_remove_style_all(brightness_screen);
     common::apply_screen_style(brightness_screen);
     
-    // Título
-    lv_obj_t* title_label = lv_label_create(brightness_screen);
-    lv_label_set_text(title_label, "Brilho");
-    lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(title_label, common::TITLE_FONT, 0);
-    lv_obj_set_style_pad_top(title_label, 4, 0);
-    lv_obj_set_style_pad_bottom(title_label, 4, 0);
-    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 10);
+    // Título usando helper
+    common::create_screen_title(brightness_screen, "Brilho");
+    
+    // Layout base Y
+    int32_t current_y = common::HEADER_HEIGHT + 20;
     
     // Label "Automático"
     lv_obj_t* auto_label = lv_label_create(brightness_screen);
     lv_label_set_text(auto_label, "Automático");
-    lv_obj_set_style_text_color(auto_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(auto_label, common::TEXT_FONT, 0);
-    lv_obj_align(auto_label, LV_ALIGN_TOP_LEFT, 20, 50);
+    common::apply_common_label_style(auto_label);
+    lv_obj_align(auto_label, LV_ALIGN_TOP_LEFT, 20, current_y + 5); // +5 para centralizar com switch
     
     // Switch de brilho automático
     brightness_auto_switch = lv_switch_create(brightness_screen);
     lv_obj_set_size(brightness_auto_switch, 50, 25);
-    lv_obj_align(brightness_auto_switch, LV_ALIGN_TOP_RIGHT, -20, 50);
+    lv_obj_align(brightness_auto_switch, LV_ALIGN_TOP_RIGHT, -20, current_y);
     
     // Configurar estado inicial do switch
     auto &display = DisplayDriver::instance();
@@ -176,10 +171,12 @@ void show_brightness_screen() {
     }
     lv_obj_add_event_cb(brightness_auto_switch, brightness_auto_switch_cb, LV_EVENT_VALUE_CHANGED, nullptr);
     
+    current_y += 45; // Espaço após switch
+    
     // Slider de brilho manual
     brightness_slider = lv_slider_create(brightness_screen);
     lv_obj_set_size(brightness_slider, 280, 20);
-    lv_obj_align(brightness_slider, LV_ALIGN_TOP_MID, 0, 90);
+    lv_obj_align(brightness_slider, LV_ALIGN_TOP_MID, 0, current_y);
     lv_slider_set_range(brightness_slider, 5, 100);
     lv_bar_set_value(brightness_slider, display.get_brightness(), LV_ANIM_OFF);
     
@@ -190,19 +187,22 @@ void show_brightness_screen() {
     
     lv_obj_add_event_cb(brightness_slider, brightness_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
     
+    current_y += 35; // Espaço após slider
+    
     // Label com valor do brilho
     brightness_value_label = lv_label_create(brightness_screen);
     lv_obj_set_style_text_align(brightness_value_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(brightness_value_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(brightness_value_label, common::TEXT_FONT, 0);
-    lv_obj_align(brightness_value_label, LV_ALIGN_TOP_MID, 0, 120);
+    common::apply_common_label_style(brightness_value_label);
+    lv_obj_align(brightness_value_label, LV_ALIGN_TOP_MID, 0, current_y);
+    
+    current_y += 25;
     
     // Label com valor do LDR (informação)
     brightness_ldr_label = lv_label_create(brightness_screen);
     lv_obj_set_style_text_align(brightness_ldr_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(brightness_ldr_label, lv_color_hex(0x666666), 0);
+    lv_obj_set_style_text_color(brightness_ldr_label, common::COLOR_TEXT_GRAY(), 0);
     lv_obj_set_style_text_font(brightness_ldr_label, common::CAPTION_FONT, 0);
-    lv_obj_align(brightness_ldr_label, LV_ALIGN_TOP_MID, 0, 145);
+    lv_obj_align(brightness_ldr_label, LV_ALIGN_TOP_MID, 0, current_y);
     
     // Atualizar labels iniciais
     update_brightness_labels();
@@ -213,23 +213,8 @@ void show_brightness_screen() {
         ESP_LOGI(TAG, "Task de atualização de brilho criada");
     }
     
-    // Botão de voltar
-    lv_obj_t* back_button = lv_button_create(brightness_screen);
-    lv_obj_set_size(back_button, 150, 44);
-    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -16);
-    
-    lv_obj_set_style_bg_color(back_button, common::COLOR_BUTTON_GRAY(), 0);
-    lv_obj_set_style_bg_opa(back_button, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(back_button, lv_color_white(), 0);
-    lv_obj_set_style_radius(back_button, 16, 0);
-    lv_obj_set_style_pad_all(back_button, 4, 0);
-    
-    lv_obj_t* back_label = lv_label_create(back_button);
-    lv_label_set_text(back_label, "Voltar");
-    lv_obj_center(back_label);
-    lv_obj_set_style_text_font(back_label, common::TEXT_FONT, 0);
-    
-    lv_obj_add_event_cb(back_button, back_button_cb, LV_EVENT_CLICKED, nullptr);
+    // Botão de voltar usando helper
+    common::create_back_button(brightness_screen, back_button_cb);
     
     // Carregar tela
     lv_screen_load(brightness_screen);
@@ -242,4 +227,3 @@ void show_brightness_screen() {
 
 } // namespace screens
 } // namespace ui
-

@@ -4,3 +4,7 @@
 void lvgl_lock();
 void lvgl_unlock();
 
+// Funções para resetar timeout automático
+void reset_password_timeout();
+void reset_config_timeout();
+

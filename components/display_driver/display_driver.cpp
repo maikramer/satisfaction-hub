@@ -69,7 +69,7 @@ constexpr uint32_t LEDC_MAX_DUTY = (1 << 8) - 1;  // 255
 // Configuração ADC para LDR
 constexpr adc_unit_t ADC_UNIT = ADC_UNIT_1;
 constexpr adc_channel_t ADC_LDR_CHANNEL = ADC_CHANNEL_6;  // GPIO34 = ADC1_CH6
-constexpr adc_atten_t ADC_ATTEN = ADC_ATTEN_DB_12;  // 0-3.3V (DB_12 no ESP-IDF v6.0)
+constexpr adc_atten_t ADC_ATTEN = ADC_ATTEN_DB_12;  // 0-3.9V (DB_12 no ESP32)
 constexpr adc_bitwidth_t ADC_BITWIDTH = ADC_BITWIDTH_12;  // 12 bits
 constexpr uint32_t BRIGHTNESS_UPDATE_INTERVAL_MS = 500;  // Atualizar brilho a cada 500ms
 } // namespace
@@ -254,8 +254,8 @@ esp_err_t DisplayDriver::init_backlight() {
     ledc_channel.hpoint = 0;
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ledc_channel), TAG, "LEDC channel config failed");
     
-    // Definir brilho inicial (50%)
-    current_brightness_ = 50;
+    // Definir brilho inicial (100% - padrão manual)
+    current_brightness_ = 100;
     set_brightness(current_brightness_);
     
     ESP_LOGI(TAG, "Backlight PWM inicializado (freq: %d Hz, resolução: %d bits)", 
@@ -412,6 +412,13 @@ esp_err_t DisplayDriver::init_panel_device() {
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel_handle_), TAG, "panel reset failed");
     vTaskDelay(pdMS_TO_TICKS(120));  // Aguardar estabilização após reset
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel_handle_), TAG, "panel init failed");
+    
+    // Habilitar gamma correction (GAMMASET 0x26) - curva 1 (G2.2) para melhor qualidade visual
+    ESP_LOGI(TAG, "Habilitando gamma correction (GAMMASET)...");
+    const uint8_t gamma_curve = 0x01; // Curva 1 (G2.2) - padrão recomendado
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(panel_io_, 0x26, &gamma_curve, 1), 
+                        TAG, "GAMMASET command failed");
+    vTaskDelay(pdMS_TO_TICKS(10)); // Pequeno delay após comando
     
     // Corrigir espelhamento horizontal (X) - usuário reportou que está espelhado
     ESP_LOGI(TAG, "Aplicando espelhamento horizontal para corrigir orientação...");
@@ -865,15 +872,22 @@ void DisplayDriver::load_brightness_settings() {
     esp_err_t err = nvs_open(BRIGHTNESS_NVS_NAMESPACE, NVS_READONLY, &handle);
     if (err != ESP_OK) {
         ESP_LOGI(TAG, "Nenhuma configuração de brilho salva, usando padrões");
+        // Aplicar padrões: autobrilho desabilitado, brilho manual 100%
+        auto_brightness_enabled_ = false;
+        manual_brightness_ = 100;
+        set_brightness(manual_brightness_);
         return;
     }
     
     // Carregar modo automático
-    uint8_t auto_enabled = 1;  // Padrão: habilitado
+    uint8_t auto_enabled = 0;  // Padrão: desabilitado (autobrilho quebrado)
     size_t required_size = sizeof(auto_enabled);
     err = nvs_get_blob(handle, BRIGHTNESS_NVS_KEY_AUTO, &auto_enabled, &required_size);
     if (err == ESP_OK && required_size == sizeof(auto_enabled)) {
         auto_brightness_enabled_ = (auto_enabled != 0);
+    } else {
+        // Se não houver configuração salva, usar padrão desabilitado
+        auto_brightness_enabled_ = false;
     }
     
     // Carregar brilho manual
@@ -888,12 +902,13 @@ void DisplayDriver::load_brightness_settings() {
             manual_brightness_ = MIN_BRIGHTNESS;
         }
     } else {
-        manual_brightness_ = 50;  // Padrão: 50%
+        manual_brightness_ = 100;  // Padrão: 100% (brilho máximo)
     }
     
     nvs_close(handle);
     
     // Aplicar configurações carregadas
+    // Nota: Autobrilho está desabilitado por padrão pois o hardware está quebrado
     if (auto_brightness_enabled_) {
         ESP_LOGI(TAG, "Configuração carregada: Brilho automático habilitado");
     } else {

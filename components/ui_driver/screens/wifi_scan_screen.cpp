@@ -80,25 +80,14 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     scan_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(scan_screen);
     common::apply_screen_style(scan_screen);
-    lv_obj_set_flex_flow(scan_screen, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(scan_screen,
-                          LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(scan_screen, 8, 0);
-    lv_obj_set_style_pad_row(scan_screen, 6, 0);
+    
+    // Usar layout manual para elementos principais (título e botão voltar)
+    // e um container flex para a lista
     
     // Título
-    title_label = lv_label_create(scan_screen);
-    lv_label_set_text(title_label, "Escaneando WiFi...");
-    lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(title_label, common::TITLE_FONT, 0);
-    lv_obj_set_style_pad_top(title_label, 2, 0);
-    lv_obj_set_style_pad_bottom(title_label, 2, 0);
-    lv_obj_set_width(title_label, lv_pct(100));
+    title_label = common::create_screen_title(scan_screen, "Escaneando WiFi...");
     
-    // Status label
+    // Status label (logo abaixo do título)
     status_label = lv_label_create(scan_screen);
     lv_label_set_text(status_label, "Buscando redes...");
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -106,41 +95,30 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     lv_obj_set_style_text_font(status_label, common::CAPTION_FONT, 0);
     lv_obj_set_width(status_label, lv_pct(100));
     lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
+    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, common::HEADER_HEIGHT + 5);
     
-    // Container scrollável para lista de redes (será preenchida após o scan)
+    // Container scrollável para lista de redes
     list_obj = lv_obj_create(scan_screen);
-    lv_obj_set_width(list_obj, lv_pct(100));
-    lv_obj_set_style_flex_grow(list_obj, 1, 0);
+    lv_obj_set_width(list_obj, 300); // Largura fixa para consistência
+    // Altura dinâmica: começa abaixo do status, termina acima do botão voltar
+    // Topo: ~65px (40 header + 25 status)
+    // Botão Voltar: ~50px altura total com padding
+    // Altura disp: 240 - 65 - 50 - 10 = 115px aprox
+    lv_obj_set_height(list_obj, 115);
+    lv_obj_align(list_obj, LV_ALIGN_TOP_MID, 0, common::HEADER_HEIGHT + 30);
+    
     lv_obj_set_style_bg_color(list_obj, lv_color_white(), 0);
-    lv_obj_set_style_border_color(list_obj, lv_color_hex(0xCCCCCC), 0);
+    lv_obj_set_style_border_color(list_obj, common::COLOR_BORDER(), 0);
     lv_obj_set_style_border_width(list_obj, 1, 0);
-    lv_obj_set_style_radius(list_obj, 8, 0);
+    lv_obj_set_style_radius(list_obj, common::BUTTON_RADIUS, 0);
     lv_obj_set_style_pad_all(list_obj, 6, 0);
     lv_obj_set_style_pad_row(list_obj, 6, 0);
     lv_obj_set_flex_flow(list_obj, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(list_obj,
-                          LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(list_obj, LV_SCROLLBAR_MODE_ACTIVE);
     lv_obj_set_scroll_dir(list_obj, LV_DIR_VER);
-    lv_obj_clear_flag(list_obj, LV_OBJ_FLAG_SCROLL_ELASTIC);  // Desabilitar scroll elástico
     
     // Botão voltar
-    back_button = lv_button_create(scan_screen);
-    lv_obj_set_width(back_button, lv_pct(60));
-    lv_obj_set_height(back_button, 36);
-    lv_obj_set_style_pad_ver(back_button, 4, 0);
-    lv_obj_set_style_margin_top(back_button, 4, 0);
-    lv_obj_set_style_bg_color(back_button, common::COLOR_BUTTON_GRAY(), 0);
-    common::apply_common_button_style(back_button);
-    
-    lv_obj_t* back_label = lv_label_create(back_button);
-    lv_label_set_text(back_label, "Voltar");
-    lv_obj_center(back_label);
-    lv_obj_set_style_text_font(back_label, common::TEXT_FONT, 0);
-    
-    lv_obj_add_event_cb(back_button, back_button_cb, LV_EVENT_CLICKED, nullptr);
+    back_button = common::create_back_button(scan_screen, back_button_cb);
     
     // Carregar a tela primeiro para mostrar "Escaneando..."
     lv_screen_load(scan_screen);
@@ -148,8 +126,6 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     
     lvgl_unlock();
     
-    // Fazer scan em uma task separada para não bloquear a UI
-    // (mas vamos fazer de forma simples primeiro, depois podemos otimizar)
     ESP_LOGI(TAG, "Iniciando scan WiFi...");
     
     // Fazer scan
@@ -162,11 +138,11 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     if (network_count < 0) {
         ESP_LOGE(TAG, "Erro ao fazer scan WiFi");
         lv_label_set_text(status_label, "Erro ao escanear redes");
-        lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF0000), 0);
+        lv_obj_set_style_text_color(status_label, common::COLOR_ERROR(), 0);
     } else if (network_count == 0) {
         ESP_LOGW(TAG, "Nenhuma rede encontrada");
         lv_label_set_text(status_label, "Nenhuma rede encontrada");
-        lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF9800), 0);
+        lv_obj_set_style_text_color(status_label, common::COLOR_WARNING(), 0);
     } else {
         ESP_LOGI(TAG, "Encontradas %d redes", network_count);
         
@@ -186,14 +162,14 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
         
         // Adicionar redes ao container
         for (int i = 0; i < network_count; i++) {
-            // Criar botão para cada rede
+            // Criar botão para cada rede usando estilo padrão, mas customizado para row
             lv_obj_t* btn = lv_button_create(list_obj);
             lv_obj_set_width(btn, lv_pct(100));
             lv_obj_set_height(btn, 34);
             lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-            lv_obj_set_style_border_color(btn, lv_color_hex(0xCCCCCC), 0);
+            lv_obj_set_style_border_color(btn, common::COLOR_BORDER(), 0);
             lv_obj_set_style_border_width(btn, 1, 0);
-            lv_obj_set_style_radius(btn, 6, 0);
+            lv_obj_set_style_radius(btn, common::BUTTON_RADIUS - 2, 0); // Um pouco menos arredondado na lista
             lv_obj_set_style_pad_hor(btn, 8, 0);
             lv_obj_set_style_pad_ver(btn, 4, 0);
             lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
@@ -231,7 +207,7 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
             
             lv_obj_t* info_label = lv_label_create(btn);
             lv_label_set_text(info_label, info_text);
-            lv_obj_set_style_text_color(info_label, lv_color_hex(0x757575), 0);
+            lv_obj_set_style_text_color(info_label, common::COLOR_TEXT_GRAY(), 0);
             lv_obj_set_style_text_font(info_label, common::CAPTION_FONT, 0);
             lv_label_set_long_mode(info_label, LV_LABEL_LONG_CLIP);
             lv_obj_set_width(info_label, lv_pct(35));
@@ -285,4 +261,3 @@ bool is_wifi_scan_screen_visible() {
 
 } // namespace screens
 } // namespace ui
-

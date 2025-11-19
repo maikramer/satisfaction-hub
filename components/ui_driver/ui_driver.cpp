@@ -1,11 +1,15 @@
 #include "ui_driver.hpp"
 #include "ui_common.hpp"
+#include "ui_common_internal.hpp" // Include internal helper definitions
 #include "screens/wifi_config_screen.hpp"
 #include "screens/brightness_screen.hpp"
+#include "screens/password_screen.hpp"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <utility>
 
 #include "esp_log.h"
 #include "esp_err.h"
@@ -61,6 +65,15 @@ void lvgl_unlock() {
     }
 }
 
+// Variáveis de timeout (fora do namespace anônimo para acesso externo)
+bool password_timeout_pending = false;
+uint32_t password_timeout_counter = 0;
+constexpr uint32_t PASSWORD_TIMEOUT_CYCLES = 100;  // 100 ciclos (~10s)
+
+bool config_timeout_pending = false;
+uint32_t config_timeout_counter = 0;
+constexpr uint32_t CONFIG_TIMEOUT_CYCLES = 100;  // 100 ciclos (~10s)
+
 namespace {
 constexpr char TAG[] = "UI";
 
@@ -92,6 +105,10 @@ constexpr uint32_t THANK_YOU_RETURN_DELAY_CYCLES = 100;  // 100 ciclos (~10s)
 bool wifi_status_last_connected = false;  // Estado conhecido do WiFi para o ícone
 bool wifi_status_update_pending = false;  // Flag para atualizar ícone após mudança de estado
 
+// Flags para transições pendentes de timeout (processadas de forma assíncrona)
+bool password_timeout_transition_pending = false;
+bool config_timeout_transition_pending = false;
+
 // Objetos LVGL
 lv_obj_t *question_screen = nullptr;
 lv_obj_t *thank_you_screen = nullptr;
@@ -101,7 +118,6 @@ lv_obj_t *question_label = nullptr;
 lv_obj_t *thank_you_label = nullptr;
 lv_obj_t *thank_you_summary = nullptr;
 lv_obj_t *settings_button = nullptr;  // Botão de configurações na tela principal
-lv_obj_t *config_calibrate_button = nullptr;  // Botão de calibração na tela de configurações
 lv_obj_t *wifi_status_icon = nullptr;  // Ícone de status WiFi na tela principal
 
 lv_display_t *display_handle = nullptr;
@@ -113,6 +129,20 @@ void show_thank_you_screen();
 void show_configuration_screen();
 void create_configuration_screen();
 static void update_wifi_status_icon();  // Atualizar ícone de status WiFi
+
+// Callbacks assíncronos para processar timeouts em contexto seguro do LVGL
+static void password_timeout_async_cb(void *user_data) {
+    ESP_LOGI(TAG, "Processando timeout de senha - voltando para tela principal");
+    ::ui::screens::hide_password_screen();
+    show_question_screen();
+    password_timeout_transition_pending = false;
+}
+
+static void config_timeout_async_cb(void *user_data) {
+    ESP_LOGI(TAG, "Processando timeout de configurações - voltando para tela principal");
+    show_question_screen();
+    config_timeout_transition_pending = false;
+}
 
 // Função helper para criar cores
 static lv_color_t make_color(uint32_t hex) {
@@ -196,15 +226,6 @@ static const char* get_device_id_string() {
     return DEVICE_ID_BUFFER;
 }
 
-// Fontes principais - usando fonte Roboto customizada com suporte a acentos
-// Nota: A fonte atual é 6px (muito pequena). Para melhor legibilidade, 
-// considere gerar versões maiores (16px, 20px, 24px) usando o LVGL Font Converter
-static const lv_font_t *TITLE_FONT = &roboto;   // Roboto customizada
-static const lv_font_t *TEXT_FONT = &roboto;    // Roboto customizada
-static const lv_font_t *CAPTION_FONT = &roboto; // Roboto customizada
-
-// Fontes maiores para botões (definidas nas linhas abaixo)
-
 // Função para enviar avaliação ao Supabase
 static void send_rating_to_supabase(int rating) {
     auto& wifi = wifi::WiFiManager::instance();
@@ -265,14 +286,29 @@ static void rating_button_cb(lv_event_t *e) {
 // Callback para botão de configurações
 static void settings_button_cb(lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Abrindo tela de configurações...");
-        show_configuration_screen();
+        ESP_LOGI(TAG, "Solicitando senha para configurações...");
+        // Chamar tela de senha
+        ::ui::screens::show_password_screen(
+            []() {
+                // Sucesso
+                ESP_LOGI(TAG, "Senha correta, abrindo configurações...");
+                show_configuration_screen();
+            },
+            []() {
+                // Cancelar
+                ESP_LOGI(TAG, "Senha cancelada, voltando...");
+                show_question_screen();
+            }
+        );
     }
 }
 
 // Callback para botão de calibração na tela de configurações
 static void config_calibrate_button_cb(lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        // Resetar timeout ao interagir
+        reset_config_timeout();
+        
         ESP_LOGI(TAG, "Iniciando calibração da tela de configurações...");
         start_calibration();
     }
@@ -281,6 +317,9 @@ static void config_calibrate_button_cb(lv_event_t *e) {
 // Callback para botão de voltar na tela de configurações
 static void config_back_button_cb(lv_event_t *e) {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        // Resetar timeout ao interagir (mas vamos fechar mesmo assim)
+        reset_config_timeout();
+        
         ESP_LOGI(TAG, "Voltando para tela principal...");
         show_question_screen();
     }
@@ -425,10 +464,14 @@ static void finish_calibration() {
     new_cal.yMax = static_cast<uint16_t>(yMax_calc);
 
     if (new_cal.xMin > new_cal.xMax) {
-        std::swap(new_cal.xMin, new_cal.xMax);
+        uint16_t temp = new_cal.xMin;
+        new_cal.xMin = new_cal.xMax;
+        new_cal.xMax = temp;
     }
     if (new_cal.yMin > new_cal.yMax) {
-        std::swap(new_cal.yMin, new_cal.yMax);
+        uint16_t temp = new_cal.yMin;
+        new_cal.yMin = new_cal.yMax;
+        new_cal.yMax = temp;
     }
 
     ESP_LOGI(TAG, "=== CALIBRAÇÃO FINAL ===");
@@ -505,21 +548,16 @@ void start_calibration() {
 
     calibration_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(calibration_screen);
-    lv_obj_set_style_bg_color(calibration_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
-    lv_obj_set_style_bg_opa(calibration_screen, LV_OPA_COVER, 0);
+    ::ui::common::apply_screen_style(calibration_screen);
     lv_obj_add_flag(calibration_screen, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(calibration_screen, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_screen_load(calibration_screen);
 
-    calibration_label = lv_label_create(calibration_screen);
-    lv_label_set_text(calibration_label, "Calibrando tela...");
+    // Usar helper para título (mas ajustar posição se necessário)
+    calibration_label = ::ui::common::create_screen_title(calibration_screen, "Calibrando tela...");
+    // Resetar alinhamento pois update_calibration_ui vai mudar o texto e pode precisar de espaço
     lv_obj_set_width(calibration_label, 280);
-    lv_obj_set_style_text_color(calibration_label, lv_color_hex(0x000000), 0); // Texto preto
-    // Usar fonte Roboto customizada
-    lv_obj_set_style_text_font(calibration_label, TEXT_FONT, 0);
-    // Adicionar padding vertical ao label para evitar corte do texto
-    lv_obj_set_style_pad_top(calibration_label, 4, 0);
-    lv_obj_set_style_pad_bottom(calibration_label, 4, 0);
+    lv_label_set_long_mode(calibration_label, LV_LABEL_LONG_WRAP);
     lv_obj_align(calibration_label, LV_ALIGN_TOP_MID, 0, 20);
 
     calibration_target = lv_obj_create(calibration_screen);
@@ -566,21 +604,21 @@ void create_question_screen() {
     ESP_LOGI(TAG, "Tela carregada");
     
     lv_obj_remove_style_all(question_screen);
-    ui::common::apply_screen_style(question_screen);
+    ::ui::common::apply_screen_style(question_screen);
     // Garantir que a tela não bloqueie eventos (deixar eventos passarem para os filhos)
     lv_obj_clear_flag(question_screen, LV_OBJ_FLAG_CLICKABLE);
     ESP_LOGI(TAG, "Estilos da tela configurados");
     
     // Header Container (Barra de status)
     lv_obj_t* header = lv_obj_create(question_screen);
-    lv_obj_set_size(header, LV_PCT(100), 40);
+    lv_obj_set_size(header, LV_PCT(100), ::ui::common::HEADER_HEIGHT);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(header, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(header, 0, 0); // Sem borda padrão
     lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(header, 1, 0);
-    lv_obj_set_style_border_color(header, lv_color_hex(0xEEEEEE), 0);
+    lv_obj_set_style_border_color(header, ::ui::common::COLOR_BORDER(), 0);
     lv_obj_set_style_radius(header, 0, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -606,7 +644,7 @@ void create_question_screen() {
     // Definir cor inicial conforme estado atual do WiFi
     auto& wifi_mgr = wifi::WiFiManager::instance();
     bool wifi_connected = wifi_mgr.is_connected();
-    lv_color_t wifi_color = wifi_connected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFF0000);
+    lv_color_t wifi_color = wifi_connected ? ::ui::common::COLOR_SUCCESS() : ::ui::common::COLOR_ERROR();
     lv_obj_set_style_text_color(wifi_label, wifi_color, 0);
     wifi_status_last_connected = wifi_connected;
     wifi_status_update_pending = false;
@@ -627,25 +665,18 @@ void create_question_screen() {
     lv_obj_center(settings_label);
     // Usar fonte Montserrat para ícones
     lv_obj_set_style_text_font(settings_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(settings_label, ui::common::COLOR_SETTINGS_BUTTON(), 0); // Cor original
+    lv_obj_set_style_text_color(settings_label, ::ui::common::COLOR_SETTINGS_BUTTON(), 0); // Cor original
     
     lv_obj_add_event_cb(settings_button, settings_button_cb, LV_EVENT_CLICKED, nullptr);
     
     // Título simples no topo (agora abaixo do header)
     ESP_LOGI(TAG, "Criando label...");
-    question_label = lv_label_create(question_screen);
-    lv_label_set_text(question_label, "Como você se sentiu hoje?");
+    // Usar helper mas ajustar posição manual pois esta tela tem header customizado
+    question_label = ::ui::common::create_screen_title(question_screen, "Como você se sentiu hoje?");
     lv_label_set_long_mode(question_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(question_label, 300);
-    lv_obj_set_style_text_align(question_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(question_label, lv_color_hex(0x000000), 0); // Texto preto
-    // Usar fonte Roboto customizada
-    lv_obj_set_style_text_font(question_label, TITLE_FONT, 0);
-    // Adicionar padding vertical ao label para evitar corte do texto
-    lv_obj_set_style_pad_top(question_label, 4, 0);
-    lv_obj_set_style_pad_bottom(question_label, 4, 0);
     // Mover texto mais para baixo para dar espaço ao header
-    lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, ::ui::common::HEADER_HEIGHT + 15);
 
     // Botões posicionados manualmente - layout simples e direto
     // 5 botões de 50px cada = 250px
@@ -694,7 +725,7 @@ void create_question_screen() {
         lv_label_set_text(btn_label, RATING_NUMBERS[i]);
         lv_obj_center(btn_label);
         // Usar fonte Roboto customizada
-        lv_obj_set_style_text_font(btn_label, TITLE_FONT, 0);
+        lv_obj_set_style_text_font(btn_label, ::ui::common::TITLE_FONT, 0);
         lv_obj_set_style_text_color(btn_label, lv_color_white(), 0);
         // Adicionar padding ao botão para evitar corte do texto
         lv_obj_set_style_pad_all(rating_buttons[i], 4, 0);
@@ -738,22 +769,12 @@ void create_thank_you_screen() {
     
     thank_you_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(thank_you_screen);
-    lv_obj_set_style_bg_color(thank_you_screen, lv_color_hex(0xFFFFFF), 0); // Fundo branco limpo
-    lv_obj_set_style_bg_opa(thank_you_screen, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(thank_you_screen, 20, 0);
-    lv_obj_set_style_pad_ver(thank_you_screen, 36, 0);
-    lv_obj_clear_flag(thank_you_screen, LV_OBJ_FLAG_SCROLLABLE);
+    ::ui::common::apply_screen_style(thank_you_screen);
     
-    // Mensagem de agradecimento
-    thank_you_label = lv_label_create(thank_you_screen);
-    lv_label_set_text(thank_you_label, "Obrigado!");
-    lv_obj_set_style_text_align(thank_you_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(thank_you_label, lv_color_hex(0x000000), 0); // Texto preto
-    lv_obj_set_style_text_font(thank_you_label, TITLE_FONT, 0);
-    // Adicionar padding vertical ao label para evitar corte do texto
-    lv_obj_set_style_pad_top(thank_you_label, 4, 0);
-    lv_obj_set_style_pad_bottom(thank_you_label, 4, 0);
-    lv_obj_align(thank_you_label, LV_ALIGN_TOP_MID, 0, 0);
+    // Mensagem de agradecimento usando helper
+    thank_you_label = ::ui::common::create_screen_title(thank_you_screen, "Obrigado!");
+    // Ajustar posição se necessário (padrão é Top Mid 10)
+    lv_obj_align(thank_you_label, LV_ALIGN_TOP_MID, 0, 30);
     
     thank_you_summary = lv_label_create(thank_you_screen);
     lv_label_set_text_fmt(thank_you_summary,
@@ -761,14 +782,14 @@ void create_thank_you_screen() {
                           selected_rating,
                           RATING_MESSAGES[selected_rating - 1]);
     lv_obj_set_style_text_align(thank_you_summary, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(thank_you_summary, lv_color_hex(0x000000), 0); // Texto preto
-    lv_obj_set_style_text_font(thank_you_summary, CAPTION_FONT, 0);
+    lv_obj_set_style_text_color(thank_you_summary, ::ui::common::COLOR_TEXT_BLACK(), 0);
+    lv_obj_set_style_text_font(thank_you_summary, ::ui::common::CAPTION_FONT, 0);
     lv_obj_set_width(thank_you_summary, LV_PCT(90));
     lv_label_set_long_mode(thank_you_summary, LV_LABEL_LONG_WRAP);
     // Adicionar padding vertical ao label para evitar corte do texto
     lv_obj_set_style_pad_top(thank_you_summary, 4, 0);
     lv_obj_set_style_pad_bottom(thank_you_summary, 4, 0);
-    lv_obj_align(thank_you_summary, LV_ALIGN_TOP_MID, 0, 36);
+    lv_obj_align(thank_you_summary, LV_ALIGN_CENTER, 0, 0);
     
 }
 
@@ -779,9 +800,7 @@ void create_configuration_screen() {
     
     configuration_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(configuration_screen);
-    lv_obj_set_style_bg_color(configuration_screen, lv_color_hex(0xF5F5F5), 0); // Fundo cinza muito claro
-    lv_obj_set_style_bg_opa(configuration_screen, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(configuration_screen, LV_OBJ_FLAG_SCROLLABLE);
+    ::ui::common::apply_screen_style(configuration_screen);
     
     // Container principal com layout flex
     lv_obj_t *main_cont = lv_obj_create(configuration_screen);
@@ -792,12 +811,13 @@ void create_configuration_screen() {
     lv_obj_set_style_pad_all(main_cont, 10, 0);
     lv_obj_set_style_pad_row(main_cont, 10, 0);
 
-    // Título
+    // Título usando helper (mas dentro do container flex)
     lv_obj_t *title_label = lv_label_create(main_cont);
     lv_label_set_text(title_label, "Configurações");
     lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label, lv_color_hex(0x333333), 0);
-    lv_obj_set_style_text_font(title_label, TITLE_FONT, 0);
+    lv_obj_set_style_text_color(title_label, ::ui::common::COLOR_TEXT_BLACK(), 0);
+    lv_obj_set_style_text_font(title_label, ::ui::common::TITLE_FONT, 0);
+    lv_obj_set_style_pad_top(title_label, 5, 0);
     
     // Container para os ícones (Grid horizontal)
     lv_obj_t *icons_cont = lv_obj_create(main_cont);
@@ -865,8 +885,8 @@ void create_configuration_screen() {
         lv_obj_t *lbl_text = lv_label_create(btn);
         lv_obj_set_width(lbl_text, LV_PCT(100));
         lv_label_set_text(lbl_text, text);
-        lv_obj_set_style_text_font(lbl_text, TEXT_FONT, 0);
-        lv_obj_set_style_text_color(lbl_text, lv_color_hex(0x555555), 0);
+        lv_obj_set_style_text_font(lbl_text, ::ui::common::TEXT_FONT, 0);
+        lv_obj_set_style_text_color(lbl_text, ::ui::common::COLOR_TEXT_GRAY(), 0);
         lv_obj_set_style_text_align(lbl_text, LV_TEXT_ALIGN_CENTER, 0);
 
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
@@ -874,47 +894,48 @@ void create_configuration_screen() {
     };
 
     // Botão WiFi
-    create_icon_btn(icons_cont, LV_SYMBOL_WIFI, "WiFi", lv_color_hex(0x2196F3), [](lv_event_t *e) {
+    create_icon_btn(icons_cont, LV_SYMBOL_WIFI, "WiFi", ::ui::common::COLOR_BUTTON_BLUE(), [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            // Resetar timeout ao interagir
+            reset_config_timeout();
+            
             ESP_LOGI(TAG, "Abrindo configuração WiFi...");
             current_state = AppState::WIFI_CONFIG;
-            ui::screens::on_back_callback = show_configuration_screen;
-            ui::screens::show_wifi_config_screen();
+            ::ui::screens::on_back_callback = show_configuration_screen;
+            ::ui::screens::show_wifi_config_screen();
         }
     });
     
     // Botão Brilho
-    create_icon_btn(icons_cont, LV_SYMBOL_EYE_OPEN, "Brilho", lv_color_hex(0xFFC107), [](lv_event_t *e) {
+    create_icon_btn(icons_cont, LV_SYMBOL_EYE_OPEN, "Brilho", ::ui::common::COLOR_WARNING(), [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            // Resetar timeout ao interagir
+            reset_config_timeout();
+            
             ESP_LOGI(TAG, "Abrindo configuração de brilho...");
             current_state = AppState::BRIGHTNESS_CONFIG;
-            ui::screens::brightness_on_back_callback = show_configuration_screen;
-            ui::screens::show_brightness_screen();
+            ::ui::screens::brightness_on_back_callback = show_configuration_screen;
+            ::ui::screens::show_brightness_screen();
         }
     });
     
     // Botão Calibração
-    create_icon_btn(icons_cont, LV_SYMBOL_SETTINGS, "Calibrar", lv_color_hex(0x607D8B), config_calibrate_button_cb);
+    create_icon_btn(icons_cont, LV_SYMBOL_SETTINGS, "Calibrar", ::ui::common::COLOR_SETTINGS_BUTTON(), config_calibrate_button_cb);
 
-    // Botão de voltar
-    lv_obj_t *back_button = lv_button_create(main_cont);
-    lv_obj_set_size(back_button, LV_PCT(50), 40);
-    lv_obj_set_style_bg_color(back_button, lv_color_hex(0xF44336), 0); // Vermelho suave
-    lv_obj_set_style_bg_opa(back_button, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(back_button, 20, 0);
-    lv_obj_set_style_shadow_width(back_button, 0, 0);
-    
-    lv_obj_t *back_label = lv_label_create(back_button);
-    lv_label_set_text(back_label, "Voltar");
-    lv_obj_center(back_label);
-    lv_obj_set_style_text_font(back_label, TEXT_FONT, 0);
-    lv_obj_set_style_text_color(back_label, lv_color_white(), 0);
+    // Botão de voltar usando helper
+    // Mas como estamos num flex container, precisamos usar create_button e não create_back_button (que usa align)
+    lv_obj_t *back_button = ::ui::common::create_button(main_cont, "Voltar", 150, ::ui::common::COLOR_ERROR());
+    lv_obj_set_style_radius(back_button, 20, 0); // Radius maior como no design original
     
     lv_obj_add_event_cb(back_button, config_back_button_cb, LV_EVENT_CLICKED, nullptr);
 }
 
 void show_configuration_screen() {
     current_state = AppState::CONFIGURATION;
+    
+    // Resetar timeout ao mostrar tela de configurações
+    config_timeout_pending = true;
+    config_timeout_counter = 0;
     
     lvgl_lock();
     
@@ -967,24 +988,28 @@ void show_question_screen() {
     thank_you_return_pending = false;
     thank_you_return_counter = 0;
     
-    // Sempre recriar a tela para garantir estado limpo e evitar problemas de UI bagunçada
-    // especialmente quando voltamos das configurações
+    // Desativar timeouts de senha e configurações ao voltar para tela principal
+    password_timeout_pending = false;
+    password_timeout_counter = 0;
+    config_timeout_pending = false;
+    config_timeout_counter = 0;
+    // Cancelar qualquer transição pendente agendada
+    password_timeout_transition_pending = false;
+    config_timeout_transition_pending = false;
+    lv_async_call_cancel(password_timeout_async_cb, nullptr);
+    lv_async_call_cancel(config_timeout_async_cb, nullptr);
+    
+    // Se a tela já existe, apenas recarregá-la (mais rápido e evita deadlock)
     if (question_screen != nullptr) {
-        ESP_LOGI(TAG, "Deletando tela existente para recriar...");
+        ESP_LOGI(TAG, "Tela de pergunta já existe - apenas recarregando...");
         lvgl_lock();
-        lv_obj_del(question_screen);
-        question_screen = nullptr;
-        question_label = nullptr;
-        settings_button = nullptr;
-        wifi_status_icon = nullptr;
-        // Limpar referências dos botões
-        for (int i = 0; i < 5; i++) {
-            rating_buttons[i] = nullptr;
-        }
+        lv_screen_load(question_screen);
+        lv_obj_invalidate(question_screen);
         lvgl_unlock();
+        return;
     }
     
-    // Criar nova tela limpa (create_question_screen() já faz lock internamente)
+    // Criar nova tela apenas se não existir (create_question_screen() já faz lock internamente)
     create_question_screen();
 }
 
@@ -1036,9 +1061,9 @@ static void update_wifi_status_icon() {
                 
                 // Atualizar cor: verde se conectado, vermelho se desconectado
                 if (connected) {
-                    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0x00FF00), 0); // Verde
+                    lv_obj_set_style_text_color(wifi_label, ::ui::common::COLOR_SUCCESS(), 0); // Verde
                 } else {
-                    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0xFF0000), 0); // Vermelho
+                    lv_obj_set_style_text_color(wifi_label, ::ui::common::COLOR_ERROR(), 0); // Vermelho
                 }
                 lv_obj_invalidate(wifi_label);
             }
@@ -1082,9 +1107,48 @@ void update() {
             show_question_screen();
         }
     }
+    
+    // Timeout automático para tela de senha (10 segundos)
+    if (::ui::screens::is_password_screen_visible() && password_timeout_pending) {
+        password_timeout_counter++;
+        if (password_timeout_counter >= PASSWORD_TIMEOUT_CYCLES) {
+            password_timeout_pending = false;
+            password_timeout_counter = 0;
+            if (!password_timeout_transition_pending) {
+                ESP_LOGI(TAG, "Timeout na tela de senha - agendando transição");
+                password_timeout_transition_pending = true;
+                lv_async_call(password_timeout_async_cb, nullptr);
+            }
+        }
+    }
+    
+    // Timeout automático para tela de configurações (10 segundos)
+    if (current_state == AppState::CONFIGURATION && config_timeout_pending) {
+        config_timeout_counter++;
+        if (config_timeout_counter >= CONFIG_TIMEOUT_CYCLES) {
+            config_timeout_pending = false;
+            config_timeout_counter = 0;
+            if (!config_timeout_transition_pending) {
+                ESP_LOGI(TAG, "Timeout na tela de configurações - agendando transição");
+                config_timeout_transition_pending = true;
+                lv_async_call(config_timeout_async_cb, nullptr);
+            }
+        }
+    }
 }
 
 } // namespace
+
+// Funções para resetar timeout automático
+void reset_password_timeout() {
+    password_timeout_pending = true;
+    password_timeout_counter = 0;
+}
+
+void reset_config_timeout() {
+    config_timeout_pending = true;
+    config_timeout_counter = 0;
+}
 
 namespace ui {
 

@@ -110,20 +110,14 @@ void show_input_screen(
     lv_obj_remove_style_all(input_screen);
     common::apply_screen_style(input_screen);
     
-    // Título
-    title_label = lv_label_create(input_screen);
-    lv_label_set_text(title_label, title ? title : "Digite");
-    lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(title_label, common::TITLE_FONT, 0);
-    lv_obj_set_style_pad_top(title_label, 4, 0);
-    lv_obj_set_style_pad_bottom(title_label, 4, 0);
-    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 10);
+    // Título usando helper
+    title_label = common::create_screen_title(input_screen, title ? title : "Digite");
     
     // Campo de input (abaixo do título)
     input_textarea = lv_textarea_create(input_screen);
-    lv_obj_set_size(input_textarea, 300, 45);
-    lv_obj_align(input_textarea, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_set_size(input_textarea, 300, common::INPUT_HEIGHT);
+    lv_obj_align(input_textarea, LV_ALIGN_TOP_MID, 0, common::HEADER_HEIGHT + 10);
+    
     #if LV_USE_TEXTAREA != 0
     if (placeholder) {
         lv_textarea_set_placeholder_text(input_textarea, placeholder);
@@ -138,7 +132,7 @@ void show_input_screen(
     }
     #endif
     lv_obj_set_style_bg_color(input_textarea, lv_color_white(), 0);
-    lv_obj_set_style_border_color(input_textarea, lv_color_hex(0xCCCCCC), 0);
+    lv_obj_set_style_border_color(input_textarea, common::COLOR_BORDER(), 0);
     lv_obj_set_style_border_width(input_textarea, 1, 0);
     lv_obj_set_style_text_color(input_textarea, common::COLOR_TEXT_BLACK(), 0);
     lv_obj_add_flag(input_textarea, LV_OBJ_FLAG_CLICKABLE);
@@ -156,54 +150,26 @@ void show_input_screen(
         ESP_LOGE(TAG, "Falha ao criar teclado!");
     } else {
         ESP_LOGI(TAG, "Teclado criado com sucesso");
-        // Teclado ocupa a parte inferior - altura maior para melhor uso do espaço
-        // Altura da tela: 240px, deixar espaço para título (30px) + input (50px) + botões (40px) = 120px
-        // Teclado pode ter ~120px de altura
+        // Teclado ocupa a parte inferior
         lv_obj_set_size(keyboard, 320, 120);
-        // Alinhar ao bottom (começando de baixo para cima)
         lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
-        // Associar ao textarea
         lv_keyboard_set_textarea(keyboard, input_textarea);
-        // Esconder inicialmente (só aparece quando o textarea ganha foco)
         lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
-        // Callback para Ready/Cancel do teclado
         lv_obj_add_event_cb(keyboard, keyboard_event_cb, LV_EVENT_ALL, nullptr);
-        ESP_LOGI(TAG, "Teclado configurado e escondido inicialmente");
     }
     #endif
     
     // Botões OK e Cancelar pequenos e horizontais (com texto) - acima do teclado
+    // Usar altura compacta de 28px
+    ok_button = common::create_button(input_screen, "OK", 80, common::COLOR_BUTTON_BLUE(), 28);
     // Posicionar acima do teclado (que está no bottom)
-    // Botão OK (compacto, com texto)
-    ok_button = lv_button_create(input_screen);
-    lv_obj_set_size(ok_button, 80, 28);  // Mais compacto verticalmente (28px ao invés de 35px)
-    // Posicionar acima do teclado: bottom do teclado está em y=240, então botões em y=240-120-5=115
-    lv_obj_align(ok_button, LV_ALIGN_BOTTOM_MID, -50, -128);  // Acima do teclado, à esquerda
-    lv_obj_set_style_bg_color(ok_button, common::COLOR_BUTTON_BLUE(), 0);
-    lv_obj_set_style_radius(ok_button, 6, 0);
-    lv_obj_set_style_pad_all(ok_button, 2, 0);
-    
-    lv_obj_t* ok_label = lv_label_create(ok_button);
-    lv_label_set_text(ok_label, "OK");  // Texto ao invés de ícone
-    lv_obj_center(ok_label);
-    lv_obj_set_style_text_font(ok_label, common::CAPTION_FONT, 0);  // Fonte menor para texto compacto
-    lv_obj_set_style_text_color(ok_label, lv_color_white(), 0);
+    lv_obj_align(ok_button, LV_ALIGN_BOTTOM_MID, -50, -125);
     
     lv_obj_add_event_cb(ok_button, ok_button_cb, LV_EVENT_CLICKED, nullptr);
     
-    // Botão Cancelar (compacto, com texto)
-    cancel_button = lv_button_create(input_screen);
-    lv_obj_set_size(cancel_button, 80, 28);  // Mais compacto verticalmente (28px ao invés de 35px)
-    lv_obj_align_to(cancel_button, ok_button, LV_ALIGN_OUT_RIGHT_MID, 10, 0);  // Ao lado do OK
-    lv_obj_set_style_bg_color(cancel_button, common::COLOR_BUTTON_GRAY(), 0);
-    lv_obj_set_style_radius(cancel_button, 6, 0);
-    lv_obj_set_style_pad_all(cancel_button, 2, 0);
-    
-    lv_obj_t* cancel_label = lv_label_create(cancel_button);
-    lv_label_set_text(cancel_label, "Cancelar");  // Texto ao invés de ícone
-    lv_obj_center(cancel_label);
-    lv_obj_set_style_text_font(cancel_label, common::CAPTION_FONT, 0);  // Fonte menor para texto compacto
-    lv_obj_set_style_text_color(cancel_label, lv_color_white(), 0);
+    // Botão Cancelar
+    cancel_button = common::create_button(input_screen, "Cancelar", 80, common::COLOR_BUTTON_GRAY(), 28);
+    lv_obj_align_to(cancel_button, ok_button, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
     
     lv_obj_add_event_cb(cancel_button, cancel_button_cb, LV_EVENT_CLICKED, nullptr);
     
@@ -282,4 +248,3 @@ bool is_input_screen_visible() {
 
 } // namespace screens
 } // namespace ui
-

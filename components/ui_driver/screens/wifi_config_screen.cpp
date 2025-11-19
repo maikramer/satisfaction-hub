@@ -49,14 +49,14 @@ static void connect_button_cb(lv_event_t* e) {
         if (ssid == nullptr || strlen(ssid) == 0) {
             ESP_LOGE(TAG, "SSID vazio!");
             lv_label_set_text(status_label, "Erro: SSID vazio");
-            lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF0000), 0);
+            lv_obj_set_style_text_color(status_label, common::COLOR_ERROR(), 0);
             lv_obj_invalidate(status_label);
             return;
         }
         
         // Atualizar status
         lv_label_set_text(status_label, "Conectando...");
-        lv_obj_set_style_text_color(status_label, lv_color_hex(0x0000FF), 0);
+        lv_obj_set_style_text_color(status_label, common::COLOR_BUTTON_BLUE(), 0);
         lv_obj_invalidate(status_label);
         
         // Tentar conectar (em uma task separada para não bloquear a UI)
@@ -79,7 +79,7 @@ static void connect_button_cb(lv_event_t* e) {
                     } else {
                         lv_label_set_text(status_label, "Conectado!");
                     }
-                    lv_obj_set_style_text_color(status_label, lv_color_hex(0x00FF00), 0);
+                    lv_obj_set_style_text_color(status_label, common::COLOR_SUCCESS(), 0);
                 }
                 // Atualizar ícone WiFi na tela principal será feito automaticamente pelo update()
             } else {
@@ -92,7 +92,7 @@ static void connect_button_cb(lv_event_t* e) {
                     } else {
                         lv_label_set_text(status_label, "Erro ao conectar");
                     }
-                    lv_obj_set_style_text_color(status_label, lv_color_hex(0xFF0000), 0);
+                    lv_obj_set_style_text_color(status_label, common::COLOR_ERROR(), 0);
                 }
             }
             if (status_label) {
@@ -115,6 +115,24 @@ static void back_button_cb(lv_event_t* e) {
     }
 }
 
+// Helper para criar botão com estilo de input
+static lv_obj_t* create_input_button(lv_obj_t* parent, lv_obj_t** label_out) {
+    lv_obj_t* btn = lv_button_create(parent);
+    lv_obj_set_size(btn, 240, common::INPUT_HEIGHT); // Mesma altura do input real
+    
+    lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
+    lv_obj_set_style_border_color(btn, common::COLOR_BORDER(), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_radius(btn, 4, 0);
+    
+    *label_out = lv_label_create(btn);
+    lv_obj_set_style_text_color(*label_out, common::COLOR_TEXT_BLACK(), 0);
+    lv_obj_set_style_text_font(*label_out, common::TEXT_FONT, 0);
+    lv_obj_center(*label_out);
+    
+    return btn;
+}
+
 void create_wifi_config_screen() {
     ESP_LOGI(TAG, "create_wifi_config_screen() iniciado");
     if (wifi_screen != nullptr) {
@@ -128,38 +146,25 @@ void create_wifi_config_screen() {
     lv_obj_remove_style_all(wifi_screen);
     common::apply_screen_style(wifi_screen);
     
-    // Título
-    lv_obj_t* title_label = lv_label_create(wifi_screen);
-    lv_label_set_text(title_label, "Configurar WiFi");
-    lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(title_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(title_label, common::TITLE_FONT, 0);
-    lv_obj_set_style_pad_top(title_label, 4, 0);
-    lv_obj_set_style_pad_bottom(title_label, 4, 0);
-    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 10);
+    // Título usando helper
+    lv_obj_t* title_label = common::create_screen_title(wifi_screen, "Configurar WiFi");
     
-    // Label SSID (alinhado horizontalmente com o input)
+    // Layout Y de referência
+    int32_t current_y = common::HEADER_HEIGHT + 10;
+    
+    // Label SSID
     lv_obj_t* ssid_label = lv_label_create(wifi_screen);
     lv_label_set_text(ssid_label, "SSID:");
-    lv_obj_set_style_text_color(ssid_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(ssid_label, common::TEXT_FONT, 0);
-    lv_obj_set_size(ssid_label, 50, 35);
-    lv_obj_align(ssid_label, LV_ALIGN_TOP_LEFT, 10, 50);
+    common::apply_common_label_style(ssid_label);
+    lv_obj_set_size(ssid_label, 50, common::INPUT_HEIGHT);
+    lv_obj_set_style_text_align(ssid_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_pad_top(ssid_label, 10, 0); // Centralizar verticalmente com o botão
+    lv_obj_align(ssid_label, LV_ALIGN_TOP_LEFT, 10, current_y);
     
-    // Botão/Label SSID (ao lado do label) - clicável para abrir tela de input
-    lv_obj_t* ssid_button = lv_button_create(wifi_screen);
-    lv_obj_set_size(ssid_button, 240, 35);
-    lv_obj_align_to(ssid_button, ssid_label, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
-    lv_obj_set_style_bg_color(ssid_button, lv_color_white(), 0);
-    lv_obj_set_style_border_color(ssid_button, lv_color_hex(0xCCCCCC), 0);
-    lv_obj_set_style_border_width(ssid_button, 1, 0);
-    lv_obj_set_style_radius(ssid_button, 4, 0);
-    
-    ssid_label_display = lv_label_create(ssid_button);
-    lv_obj_set_style_text_color(ssid_label_display, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(ssid_label_display, common::TEXT_FONT, 0);
+    // Botão SSID (input lookalike)
+    lv_obj_t* ssid_button = create_input_button(wifi_screen, &ssid_label_display);
+    lv_obj_align_to(ssid_button, ssid_label, LV_ALIGN_OUT_RIGHT_MID, 5, -5); // Ajuste fino
     lv_label_set_text(ssid_label_display, "Toque para escanear");
-    lv_obj_center(ssid_label_display);
     
     // Carregar SSID salvo se existir
     auto& wifi = wifi::WiFiManager::instance();
@@ -168,16 +173,13 @@ void create_wifi_config_screen() {
         lv_label_set_text(ssid_label_display, current_ssid);
     }
     
-    // Callback para abrir tela de scan quando clicar no SSID
+    // Evento SSID
     lv_obj_add_event_cb(ssid_button, [](lv_event_t* e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
             ESP_LOGI(TAG, "SSID button clicked, opening scan screen");
-            // Salvar callback original antes de sobrescrever
             saved_back_callback = ui::screens::on_back_callback;
-            // Definir callback temporário para voltar da tela de scan para a tela WiFi
             ui::screens::on_back_callback = show_wifi_config_screen;
             show_wifi_scan_screen([](const char* ssid) {
-                // Callback quando uma rede é selecionada
                 strncpy(current_ssid, ssid, sizeof(current_ssid) - 1);
                 current_ssid[sizeof(current_ssid) - 1] = '\0';
                 if (ssid_label_display) {
@@ -188,30 +190,24 @@ void create_wifi_config_screen() {
         }
     }, LV_EVENT_CLICKED, nullptr);
     
-    // Label Senha (alinhado horizontalmente com o input)
+    // Próxima linha
+    current_y += common::INPUT_HEIGHT + 15;
+    
+    // Label Senha
     lv_obj_t* password_label = lv_label_create(wifi_screen);
     lv_label_set_text(password_label, "Senha:");
-    lv_obj_set_style_text_color(password_label, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(password_label, common::TEXT_FONT, 0);
-    lv_obj_set_size(password_label, 50, 35);
-    lv_obj_align_to(password_label, ssid_label, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 15);
+    common::apply_common_label_style(password_label);
+    lv_obj_set_size(password_label, 50, common::INPUT_HEIGHT);
+    lv_obj_set_style_text_align(password_label, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_pad_top(password_label, 10, 0);
+    lv_obj_align(password_label, LV_ALIGN_TOP_LEFT, 10, current_y);
     
-    // Botão/Label Senha (ao lado do label) - clicável para abrir tela de input
-    lv_obj_t* password_button = lv_button_create(wifi_screen);
-    lv_obj_set_size(password_button, 240, 35);
-    lv_obj_align_to(password_button, password_label, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
-    lv_obj_set_style_bg_color(password_button, lv_color_white(), 0);
-    lv_obj_set_style_border_color(password_button, lv_color_hex(0xCCCCCC), 0);
-    lv_obj_set_style_border_width(password_button, 1, 0);
-    lv_obj_set_style_radius(password_button, 4, 0);
-    
-    password_label_display = lv_label_create(password_button);
-    lv_obj_set_style_text_color(password_label_display, common::COLOR_TEXT_BLACK(), 0);
-    lv_obj_set_style_text_font(password_label_display, common::TEXT_FONT, 0);
+    // Botão Senha (input lookalike)
+    lv_obj_t* password_button = create_input_button(wifi_screen, &password_label_display);
+    lv_obj_align_to(password_button, password_label, LV_ALIGN_OUT_RIGHT_MID, 5, -5);
     lv_label_set_text(password_label_display, "Toque para digitar");
-    lv_obj_center(password_label_display);
     
-    // Callback para abrir tela de input quando clicar na senha
+    // Evento Senha
     lv_obj_add_event_cb(password_button, [](lv_event_t* e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
             ESP_LOGI(TAG, "Password button clicked, opening input screen");
@@ -220,13 +216,11 @@ void create_wifi_config_screen() {
                 "Senha da rede",
                 current_password[0] ? current_password : nullptr,
                 64,
-                true,  // Modo senha
+                true,
                 [](const char* text, size_t len) {
-                    // Callback quando confirmar
                     strncpy(current_password, text, sizeof(current_password) - 1);
                     current_password[sizeof(current_password) - 1] = '\0';
                     if (password_label_display) {
-                        // Mostrar asteriscos para senha
                         char display[66] = {0};
                         for (size_t i = 0; i < len && i < sizeof(display) - 1; i++) {
                             display[i] = '*';
@@ -235,13 +229,16 @@ void create_wifi_config_screen() {
                     }
                     ESP_LOGI(TAG, "Senha atualizada (tamanho: %zu)", len);
                 },
-                nullptr,  // Sem callback de cancelamento
-                show_wifi_config_screen  // Voltar para tela WiFi quando fechar
+                nullptr,
+                show_wifi_config_screen
             );
         }
     }, LV_EVENT_CLICKED, nullptr);
     
-    // Status label - centralizado horizontalmente
+    // Próxima linha (status)
+    current_y += common::INPUT_HEIGHT + 20;
+    
+    // Status label
     status_label = lv_label_create(wifi_screen);
     lv_label_set_text(status_label, "");
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -249,44 +246,23 @@ void create_wifi_config_screen() {
     lv_obj_set_style_text_font(status_label, common::CAPTION_FONT, 0);
     lv_obj_set_width(status_label, 300);
     lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
-    // Centralizar horizontalmente na tela e posicionar abaixo do campo de senha
-    // password_button está em Y ~= 100 (50 do ssid + 35 altura + 15 espaçamento)
-    // Então status_label deve estar em Y ~= 100 + 35 (altura password) + 15 (espaçamento) = 150
-    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 150);
+    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, current_y);
     
-    // Mostrar status atual se conectado
     if (wifi.is_connected()) {
         lv_label_set_text_fmt(status_label, "Conectado: %s\nIP: %s", 
                              wifi.get_ssid(), wifi.get_ip());
-        lv_obj_set_style_text_color(status_label, lv_color_hex(0x00FF00), 0);
+        lv_obj_set_style_text_color(status_label, common::COLOR_SUCCESS(), 0);
     }
     
-    // Botão conectar (ao lado do voltar)
-    connect_button = lv_button_create(wifi_screen);
-    lv_obj_set_size(connect_button, 140, 40);
-    lv_obj_align(connect_button, LV_ALIGN_BOTTOM_MID, -80, -10);
-    lv_obj_set_style_bg_color(connect_button, common::COLOR_BUTTON_BLUE(), 0);
-    common::apply_common_button_style(connect_button);
-    
-    lv_obj_t* connect_label = lv_label_create(connect_button);
-    lv_label_set_text(connect_label, "Conectar");
-    lv_obj_center(connect_label);
-    lv_obj_set_style_text_font(connect_label, common::TEXT_FONT, 0);
-    
+    // Botões na parte inferior
+    // Conectar
+    connect_button = common::create_button(wifi_screen, "Conectar", 140, common::COLOR_BUTTON_BLUE());
+    lv_obj_align(connect_button, LV_ALIGN_BOTTOM_MID, -75, -common::SCREEN_PADDING); // Esquerda do centro
     lv_obj_add_event_cb(connect_button, connect_button_cb, LV_EVENT_CLICKED, nullptr);
     
-    // Botão voltar (ao lado do conectar)
-    back_button = lv_button_create(wifi_screen);
-    lv_obj_set_size(back_button, 140, 40);
-    lv_obj_align_to(back_button, connect_button, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
-    lv_obj_set_style_bg_color(back_button, common::COLOR_BUTTON_GRAY(), 0);
-    common::apply_common_button_style(back_button);
-    
-    lv_obj_t* back_label = lv_label_create(back_button);
-    lv_label_set_text(back_label, "Voltar");
-    lv_obj_center(back_label);
-    lv_obj_set_style_text_font(back_label, common::TEXT_FONT, 0);
-    
+    // Voltar
+    back_button = common::create_button(wifi_screen, "Voltar", 140, common::COLOR_BUTTON_GRAY());
+    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 75, -common::SCREEN_PADDING); // Direita do centro
     lv_obj_add_event_cb(back_button, back_button_cb, LV_EVENT_CLICKED, nullptr);
     
     ESP_LOGI(TAG, "create_wifi_config_screen() concluído");
@@ -303,13 +279,11 @@ void show_wifi_config_screen() {
     }
     
     // Se o callback não está definido ou está incorreto, garantir que não seja show_wifi_config_screen
-    // (isso evita loops infinitos)
     if (ui::screens::on_back_callback == show_wifi_config_screen) {
         ESP_LOGW(TAG, "Callback incorreto detectado (show_wifi_config_screen), limpando para evitar loop");
         ui::screens::on_back_callback = nullptr;
     }
     
-    // Se o callback ainda não está definido após restaurar, logar aviso
     if (ui::screens::on_back_callback == nullptr) {
         ESP_LOGW(TAG, "Callback não definido - botão voltar pode não funcionar corretamente");
     }
@@ -317,14 +291,9 @@ void show_wifi_config_screen() {
     lvgl_lock();
     
     if (wifi_screen == nullptr) {
-        ESP_LOGI(TAG, "Criando tela WiFi (wifi_screen é nullptr)");
         create_wifi_config_screen();
-        ESP_LOGI(TAG, "Tela WiFi criada: %p", wifi_screen);
-    } else {
-        ESP_LOGI(TAG, "Reutilizando tela WiFi existente: %p", wifi_screen);
     }
     
-    ESP_LOGI(TAG, "Carregando tela WiFi...");
     lv_screen_load(wifi_screen);
     lv_obj_invalidate(wifi_screen);
     
@@ -350,4 +319,3 @@ void destroy_wifi_config_screen() {
 
 } // namespace screens
 } // namespace ui
-
