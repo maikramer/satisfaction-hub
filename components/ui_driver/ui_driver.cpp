@@ -14,6 +14,7 @@
 #include "lvgl.h"
 #include "display_driver.hpp"
 #include "wifi_manager.hpp"
+#include "supabase_driver.hpp"
 
 // Declarar fonte Roboto customizada (suporta acentos portugueses)
 LV_FONT_DECLARE(roboto);
@@ -176,6 +177,39 @@ static const lv_font_t *CAPTION_FONT = &roboto; // Roboto customizada
 
 // Fontes maiores para botões (definidas nas linhas abaixo)
 
+// Função para enviar avaliação ao Supabase
+static void send_rating_to_supabase(int rating) {
+    auto& wifi = wifi::WiFiManager::instance();
+    if (!wifi.is_connected()) {
+        ESP_LOGW(TAG, "WiFi não conectado - avaliação não será enviada ao Supabase");
+        return;
+    }
+    
+    auto& supabase = supabase::SupabaseDriver::instance();
+    
+    // Verificar se o Supabase está configurado
+    if (!supabase.is_configured()) {
+        ESP_LOGW(TAG, "Supabase não configurado - avaliação não será enviada");
+        return;
+    }
+    
+    // Preparar dados da avaliação
+    supabase::RatingData rating_data;
+    rating_data.rating = static_cast<int32_t>(rating);
+    rating_data.message = RATING_MESSAGES[rating - 1];  // Mensagem correspondente ao rating
+    rating_data.timestamp = 0;  // 0 = usar timestamp do servidor
+    
+    ESP_LOGI(TAG, "Enviando avaliação %d (%s) para Supabase...", rating, rating_data.message);
+    
+    // Enviar avaliação (não bloqueia - executa em background)
+    esp_err_t err = supabase.submit_rating(rating_data);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Avaliação enviada com sucesso para Supabase!");
+    } else {
+        ESP_LOGE(TAG, "Erro ao enviar avaliação para Supabase: %s", esp_err_to_name(err));
+    }
+}
+
 // Callback para botão de avaliação
 static void rating_button_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -189,6 +223,9 @@ static void rating_button_cb(lv_event_t *e) {
         selected_rating = rating;
         
         ESP_LOGI(TAG, "Avaliação selecionada: %d", rating);
+        
+        // Enviar avaliação ao Supabase (se WiFi estiver conectado)
+        send_rating_to_supabase(rating);
         
         // Marcar transição pendente (será processada no update() para evitar problemas de contexto)
         pending_screen_transition = true;
@@ -666,9 +703,8 @@ void create_question_screen() {
     lvgl_unlock();
     ESP_LOGI(TAG, "create_question_screen() concluído");
     
-    // Atualizar status WiFi após desbloquear LVGL (para evitar lock duplo)
-    // Será atualizado automaticamente pelo update() também
-    update_wifi_status_icon();
+    // Não atualizar status WiFi aqui - será atualizado automaticamente pelo update() periodicamente
+    // Isso evita chamadas no contexto de eventos WiFi que podem causar stack overflow
 }
 
 void create_thank_you_screen() {
@@ -940,24 +976,68 @@ static void update_wifi_status_icon() {
         return;
     }
     
-    lvgl_lock();
+    // Verificar estado WiFi (operação leve, não precisa de lock)
     auto& wifi = wifi::WiFiManager::instance();
     bool connected = wifi.is_connected();
     
-    // Encontrar o label dentro do botão (primeiro filho)
-    lv_obj_t* wifi_label = lv_obj_get_child(wifi_status_icon, 0);
-    if (wifi_label != nullptr) {
-        // Atualizar cor: verde se conectado, vermelho se desconectado
+    // Atualizar UI em task separada para evitar stack overflow no contexto de eventos
+    // Usar uma flag estática para rastrear mudanças de estado
+    static bool last_wifi_state = false;
+    static bool update_pending = false;
+    
+    if (connected != last_wifi_state) {
+        update_pending = true;
+        last_wifi_state = connected;
+        
+        // Se WiFi acabou de conectar, criar task para testar Supabase
         if (connected) {
-            lv_obj_set_style_text_color(wifi_label, lv_color_hex(0x00FF00), 0); // Verde
-        } else {
-            lv_obj_set_style_text_color(wifi_label, lv_color_hex(0xFF0000), 0); // Vermelho
+            ESP_LOGI(TAG, "WiFi conectado - verificando Supabase...");
+            // Criar task separada para testar Supabase (evita stack overflow)
+            xTaskCreate([](void* arg) {
+                auto& supabase = supabase::SupabaseDriver::instance();
+                if (supabase.is_configured()) {
+                    // Testar conexão com Supabase
+                    esp_err_t test_err = supabase.test_connection();
+                    if (test_err == ESP_OK) {
+                        ESP_LOGI(TAG, "Conexão com Supabase verificada com sucesso!");
+                    } else {
+                        ESP_LOGW(TAG, "Teste de conexão Supabase falhou: %s", esp_err_to_name(test_err));
+                    }
+                }
+                vTaskDelete(nullptr);
+            }, "supabase_test", 8192, nullptr, 5, nullptr);
         }
-        lv_obj_invalidate(wifi_label);
     }
     
-    lv_obj_invalidate(wifi_status_icon);
-    lvgl_unlock();
+    // Atualizar UI apenas se houver mudança pendente
+    if (update_pending) {
+        // Criar task separada para atualizar UI (evita stack overflow)
+        xTaskCreate([](void* arg) {
+            lvgl_lock();
+            
+            // Encontrar o label dentro do botão (primeiro filho)
+            lv_obj_t* wifi_label = lv_obj_get_child(wifi_status_icon, 0);
+            if (wifi_label != nullptr) {
+                auto& wifi = wifi::WiFiManager::instance();
+                bool connected = wifi.is_connected();
+                
+                // Atualizar cor: verde se conectado, vermelho se desconectado
+                if (connected) {
+                    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0x00FF00), 0); // Verde
+                } else {
+                    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0xFF0000), 0); // Vermelho
+                }
+                lv_obj_invalidate(wifi_label);
+            }
+            
+            lv_obj_invalidate(wifi_status_icon);
+            lvgl_unlock();
+            
+            vTaskDelete(nullptr);
+        }, "wifi_ui_update", 2048, nullptr, 1, nullptr);
+        
+        update_pending = false;
+    }
 }
 
 void update() {
@@ -1006,6 +1086,20 @@ void init(lv_display_t *display) {
     // Inicializar WiFi Manager
     auto& wifi = wifi::WiFiManager::instance();
     wifi.init();
+    
+    // Inicializar Supabase Driver
+    auto& supabase = supabase::SupabaseDriver::instance();
+    esp_err_t supabase_init_err = supabase.init();
+    if (supabase_init_err == ESP_OK) {
+        ESP_LOGI(TAG, "Supabase Driver inicializado");
+        if (supabase.is_configured()) {
+            ESP_LOGI(TAG, "Supabase configurado e pronto para uso");
+        } else {
+            ESP_LOGW(TAG, "Supabase não configurado - use set_credentials() para configurar");
+        }
+    } else {
+        ESP_LOGW(TAG, "Erro ao inicializar Supabase Driver: %s", esp_err_to_name(supabase_init_err));
+    }
     
     auto &driver = DisplayDriver::instance();
     if (driver.has_custom_calibration()) {

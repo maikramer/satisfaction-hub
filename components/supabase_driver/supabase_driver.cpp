@@ -1,6 +1,7 @@
 #include "supabase_driver.hpp"
 
 #include <cstring>
+#include <cstdint>
 #include <cstdio>
 #include "esp_log.h"
 #include "esp_err.h"
@@ -9,12 +10,16 @@
 #include "nvs.h"
 
 // Incluir configuração se disponível (para desenvolvimento)
-#ifdef SUPABASE_CONFIG_H
+// O arquivo supabase_config.h está no .gitignore e pode não existir em todos os ambientes
+#if __has_include("supabase_config.h")
 #include "supabase_config.h"
 #endif
 
 namespace {
 constexpr char TAG[] = "SupabaseDriver";
+
+extern const uint8_t supabase_root_ca_pem_start[] asm("_binary_supabase_root_ca_pem_start");
+extern const uint8_t supabase_root_ca_pem_end[] asm("_binary_supabase_root_ca_pem_end");
 }
 
 namespace supabase {
@@ -38,14 +43,19 @@ esp_err_t SupabaseDriver::init() {
         configured_ = true;
     } else {
         // Se não encontrou no NVS, tentar usar configuração de compilação (se disponível)
-        #ifdef SUPABASE_CONFIG_H
+        #if defined(SUPABASE_URL) && defined(SUPABASE_ANON_KEY)
         ESP_LOGI(TAG, "Usando credenciais de configuração de compilação");
         strncpy(config_.url, SUPABASE_URL, sizeof(config_.url) - 1);
         config_.url[sizeof(config_.url) - 1] = '\0';
         strncpy(config_.api_key, SUPABASE_ANON_KEY, sizeof(config_.api_key) - 1);
         config_.api_key[sizeof(config_.api_key) - 1] = '\0';
+        #ifdef SUPABASE_TABLE_NAME
         strncpy(config_.table_name, SUPABASE_TABLE_NAME, sizeof(config_.table_name) - 1);
         config_.table_name[sizeof(config_.table_name) - 1] = '\0';
+        #else
+        strncpy(config_.table_name, "ratings", sizeof(config_.table_name) - 1);
+        config_.table_name[sizeof(config_.table_name) - 1] = '\0';
+        #endif
         configured_ = true;
         #else
         ESP_LOGW(TAG, "Credenciais não encontradas. Use set_credentials() para configurar.");
@@ -227,11 +237,15 @@ esp_err_t SupabaseDriver::submit_rating(const RatingData& data) {
     
     ESP_LOGI(TAG, "Enviando avaliação para Supabase: %s", json_string);
     
-    // Configurar cliente HTTP
+    // Configurar cliente HTTP com certificado CA embedado
     esp_http_client_config_t config = {};
     config.url = url;
     config.event_handler = http_event_handler;
     config.timeout_ms = 10000;
+    config.cert_pem = reinterpret_cast<const char*>(supabase_root_ca_pem_start);
+    config.cert_len = supabase_root_ca_pem_end - supabase_root_ca_pem_start;
+    config.buffer_size = 1024;
+    config.buffer_size_tx = 1024;
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) {
@@ -240,7 +254,7 @@ esp_err_t SupabaseDriver::submit_rating(const RatingData& data) {
     }
     
     // Configurar headers
-    char auth_header[256];
+    char auth_header[sizeof(config_.api_key) + 16];
     snprintf(auth_header, sizeof(auth_header), "Bearer %s", config_.api_key);
     
     esp_http_client_set_method(client, HTTP_METHOD_POST);
@@ -284,17 +298,22 @@ esp_err_t SupabaseDriver::test_connection() {
     char url[256];
     snprintf(url, sizeof(url), "%s/rest/v1/%s?select=count", config_.url, config_.table_name);
     
+    // Configurar cliente HTTP com certificado CA embedado
     esp_http_client_config_t config = {};
     config.url = url;
     config.event_handler = http_event_handler;
     config.timeout_ms = 5000;
+    config.cert_pem = reinterpret_cast<const char*>(supabase_root_ca_pem_start);
+    config.cert_len = supabase_root_ca_pem_end - supabase_root_ca_pem_start;
+    config.buffer_size = 1024;
+    config.buffer_size_tx = 1024;
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) {
         return ESP_ERR_NO_MEM;
     }
     
-    char auth_header[256];
+    char auth_header[sizeof(config_.api_key) + 16];
     snprintf(auth_header, sizeof(auth_header), "Bearer %s", config_.api_key);
     
     esp_http_client_set_method(client, HTTP_METHOD_HEAD);

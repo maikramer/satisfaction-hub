@@ -20,6 +20,9 @@ static const char* TAG = "WiFiConfigScreen";
 // Callback para voltar (será definido externamente)
 void (*on_back_callback)() = nullptr;
 
+// Callback original salvo antes de abrir tela de scan
+static void (*saved_back_callback)() = nullptr;
+
 static lv_obj_t* wifi_screen = nullptr;
 static lv_obj_t* ssid_label_display = nullptr;  // Label para mostrar o SSID atual
 static lv_obj_t* password_label_display = nullptr;  // Label para mostrar a senha atual
@@ -169,6 +172,9 @@ void create_wifi_config_screen() {
     lv_obj_add_event_cb(ssid_button, [](lv_event_t* e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
             ESP_LOGI(TAG, "SSID button clicked, opening scan screen");
+            // Salvar callback original antes de sobrescrever
+            saved_back_callback = ui::screens::on_back_callback;
+            // Definir callback temporário para voltar da tela de scan para a tela WiFi
             ui::screens::on_back_callback = show_wifi_config_screen;
             show_wifi_scan_screen([](const char* ssid) {
                 // Callback quando uma rede é selecionada
@@ -235,7 +241,7 @@ void create_wifi_config_screen() {
         }
     }, LV_EVENT_CLICKED, nullptr);
     
-    // Status label
+    // Status label - centralizado horizontalmente
     status_label = lv_label_create(wifi_screen);
     lv_label_set_text(status_label, "");
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -243,7 +249,10 @@ void create_wifi_config_screen() {
     lv_obj_set_style_text_font(status_label, common::CAPTION_FONT, 0);
     lv_obj_set_width(status_label, 300);
     lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_align_to(status_label, password_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
+    // Centralizar horizontalmente na tela e posicionar abaixo do campo de senha
+    // password_button está em Y ~= 100 (50 do ssid + 35 altura + 15 espaçamento)
+    // Então status_label deve estar em Y ~= 100 + 35 (altura password) + 15 (espaçamento) = 150
+    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 150);
     
     // Mostrar status atual se conectado
     if (wifi.is_connected()) {
@@ -285,6 +294,26 @@ void create_wifi_config_screen() {
 
 void show_wifi_config_screen() {
     ESP_LOGI(TAG, "show_wifi_config_screen() chamado");
+    
+    // Se voltamos da tela de scan, restaurar callback original
+    if (ui::screens::on_back_callback == show_wifi_config_screen && saved_back_callback != nullptr) {
+        ESP_LOGI(TAG, "Restaurando callback original após voltar da tela de scan");
+        ui::screens::on_back_callback = saved_back_callback;
+        saved_back_callback = nullptr;
+    }
+    
+    // Se o callback não está definido ou está incorreto, garantir que não seja show_wifi_config_screen
+    // (isso evita loops infinitos)
+    if (ui::screens::on_back_callback == show_wifi_config_screen) {
+        ESP_LOGW(TAG, "Callback incorreto detectado (show_wifi_config_screen), limpando para evitar loop");
+        ui::screens::on_back_callback = nullptr;
+    }
+    
+    // Se o callback ainda não está definido após restaurar, logar aviso
+    if (ui::screens::on_back_callback == nullptr) {
+        ESP_LOGW(TAG, "Callback não definido - botão voltar pode não funcionar corretamente");
+    }
+    
     lvgl_lock();
     
     if (wifi_screen == nullptr) {

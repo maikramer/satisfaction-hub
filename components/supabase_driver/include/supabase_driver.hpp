@@ -8,8 +8,8 @@ namespace supabase {
 
 struct SupabaseConfig {
     char url[128];        // URL do projeto Supabase (ex: https://xxxxx.supabase.co)
-    char api_key[128];   // API Key (anon key ou service role key)
-    char table_name[64]; // Nome da tabela para armazenar avaliações
+    char api_key[512];    // API Key (anon key ou service role key) - Supabase anon keys são longas
+    char table_name[64];  // Nome da tabela para armazenar avaliações
 };
 
 struct RatingData {
