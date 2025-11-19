@@ -80,6 +80,13 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     scan_screen = lv_obj_create(nullptr);
     lv_obj_remove_style_all(scan_screen);
     common::apply_screen_style(scan_screen);
+    lv_obj_set_flex_flow(scan_screen, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(scan_screen,
+                          LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(scan_screen, 8, 0);
+    lv_obj_set_style_pad_row(scan_screen, 6, 0);
     
     // Título
     title_label = lv_label_create(scan_screen);
@@ -87,9 +94,9 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(title_label, common::COLOR_TEXT_BLACK(), 0);
     lv_obj_set_style_text_font(title_label, common::TITLE_FONT, 0);
-    lv_obj_set_style_pad_top(title_label, 4, 0);
-    lv_obj_set_style_pad_bottom(title_label, 4, 0);
-    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_pad_top(title_label, 2, 0);
+    lv_obj_set_style_pad_bottom(title_label, 2, 0);
+    lv_obj_set_width(title_label, lv_pct(100));
     
     // Status label
     status_label = lv_label_create(scan_screen);
@@ -97,24 +104,34 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(status_label, common::COLOR_TEXT_BLACK(), 0);
     lv_obj_set_style_text_font(status_label, common::CAPTION_FONT, 0);
-    lv_obj_set_width(status_label, 300);
+    lv_obj_set_width(status_label, lv_pct(100));
     lv_label_set_long_mode(status_label, LV_LABEL_LONG_WRAP);
-    lv_obj_align_to(status_label, title_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
     
     // Container scrollável para lista de redes (será preenchida após o scan)
     list_obj = lv_obj_create(scan_screen);
-    lv_obj_set_size(list_obj, 300, 150);
-    lv_obj_align_to(list_obj, status_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+    lv_obj_set_width(list_obj, lv_pct(100));
+    lv_obj_set_style_flex_grow(list_obj, 1, 0);
     lv_obj_set_style_bg_color(list_obj, lv_color_white(), 0);
     lv_obj_set_style_border_color(list_obj, lv_color_hex(0xCCCCCC), 0);
     lv_obj_set_style_border_width(list_obj, 1, 0);
-    lv_obj_set_scrollbar_mode(list_obj, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_radius(list_obj, 8, 0);
+    lv_obj_set_style_pad_all(list_obj, 6, 0);
+    lv_obj_set_style_pad_row(list_obj, 6, 0);
+    lv_obj_set_flex_flow(list_obj, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(list_obj,
+                          LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scrollbar_mode(list_obj, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_set_scroll_dir(list_obj, LV_DIR_VER);
     lv_obj_clear_flag(list_obj, LV_OBJ_FLAG_SCROLL_ELASTIC);  // Desabilitar scroll elástico
     
     // Botão voltar
     back_button = lv_button_create(scan_screen);
-    lv_obj_set_size(back_button, 140, 40);
-    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_width(back_button, lv_pct(60));
+    lv_obj_set_height(back_button, 36);
+    lv_obj_set_style_pad_ver(back_button, 4, 0);
+    lv_obj_set_style_margin_top(back_button, 4, 0);
     lv_obj_set_style_bg_color(back_button, common::COLOR_BUTTON_GRAY(), 0);
     common::apply_common_button_style(back_button);
     
@@ -168,54 +185,57 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
         lv_obj_clean(list_obj);
         
         // Adicionar redes ao container
-        int y_offset = 5;  // Offset vertical inicial
         for (int i = 0; i < network_count; i++) {
             // Criar botão para cada rede
             lv_obj_t* btn = lv_button_create(list_obj);
-            lv_obj_set_size(btn, 290, 40);
-            lv_obj_set_pos(btn, 5, y_offset);  // Posicionar manualmente
+            lv_obj_set_width(btn, lv_pct(100));
+            lv_obj_set_height(btn, 34);
             lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
             lv_obj_set_style_border_color(btn, lv_color_hex(0xCCCCCC), 0);
             lv_obj_set_style_border_width(btn, 1, 0);
-            lv_obj_set_style_radius(btn, 4, 0);
-            lv_obj_set_style_pad_all(btn, 5, 0);
+            lv_obj_set_style_radius(btn, 6, 0);
+            lv_obj_set_style_pad_hor(btn, 8, 0);
+            lv_obj_set_style_pad_ver(btn, 4, 0);
+            lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+            lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(btn,
+                                  LV_FLEX_ALIGN_SPACE_BETWEEN,
+                                  LV_FLEX_ALIGN_CENTER,
+                                  LV_FLEX_ALIGN_CENTER);
             
-            y_offset += 45;  // Próximo botão 45px abaixo (40px altura + 5px espaçamento)
-            
-            // Criar label com SSID e indicador de senha
-            char display_text[64];
-            // Limitar SSID para evitar truncamento
+            // Criar label com SSID
             char ssid_display[50];
             strncpy(ssid_display, networks[i].ssid, sizeof(ssid_display) - 1);
             ssid_display[sizeof(ssid_display) - 1] = '\0';
             
-            if (networks[i].has_password) {
-                snprintf(display_text, sizeof(display_text), "%.45s [Senha]", ssid_display);
-            } else {
-                snprintf(display_text, sizeof(display_text), "%.45s [Aberto]", ssid_display);
-            }
-            
             lv_obj_t* label = lv_label_create(btn);
-            lv_label_set_text(label, display_text);
+            lv_label_set_text(label, ssid_display);
             lv_obj_set_style_text_color(label, common::COLOR_TEXT_BLACK(), 0);
             lv_obj_set_style_text_font(label, common::TEXT_FONT, 0);
-            lv_obj_align(label, LV_ALIGN_LEFT_MID, 5, 0);
+            lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+            lv_obj_set_width(label, lv_pct(65));
             
-            // Adicionar indicador de força do sinal (RSSI)
-            char rssi_text[16];
+            // Indicador de senha + força do sinal (RSSI)
+            const char* security_text = networks[i].has_password ? "Senha" : "Aberto";
+            const char* rssi_text = nullptr;
             if (networks[i].rssi > -50) {
-                snprintf(rssi_text, sizeof(rssi_text), "Excelente");
+                rssi_text = "Excelente";
             } else if (networks[i].rssi > -70) {
-                snprintf(rssi_text, sizeof(rssi_text), "Bom");
+                rssi_text = "Bom";
             } else {
-                snprintf(rssi_text, sizeof(rssi_text), "Fraco");
+                rssi_text = "Fraco";
             }
             
-            lv_obj_t* rssi_label = lv_label_create(btn);
-            lv_label_set_text(rssi_label, rssi_text);
-            lv_obj_set_style_text_color(rssi_label, lv_color_hex(0x757575), 0);
-            lv_obj_set_style_text_font(rssi_label, common::CAPTION_FONT, 0);
-            lv_obj_align(rssi_label, LV_ALIGN_RIGHT_MID, -5, 0);
+            char info_text[32];
+            snprintf(info_text, sizeof(info_text), "%s | %s", security_text, rssi_text);
+            
+            lv_obj_t* info_label = lv_label_create(btn);
+            lv_label_set_text(info_label, info_text);
+            lv_obj_set_style_text_color(info_label, lv_color_hex(0x757575), 0);
+            lv_obj_set_style_text_font(info_label, common::CAPTION_FONT, 0);
+            lv_label_set_long_mode(info_label, LV_LABEL_LONG_CLIP);
+            lv_obj_set_width(info_label, lv_pct(35));
+            lv_obj_set_style_text_align(info_label, LV_TEXT_ALIGN_RIGHT, 0);
             
             // Armazenar índice como user_data
             lv_obj_set_user_data(btn, (void*)(intptr_t)i);

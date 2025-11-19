@@ -213,21 +213,22 @@ esp_err_t SupabaseDriver::submit_rating(const RatingData& data) {
     char json_string[512];
     int json_len;
     
+    const char* safe_message = (data.message != nullptr) ? data.message : "";
+    const char* safe_device_id = (data.device_id != nullptr) ? data.device_id : "";
+    
     if (data.timestamp > 0) {
         json_len = snprintf(json_string, sizeof(json_string),
-            "{\"rating\":%ld,\"message\":\"%s\",\"timestamp\":%llu}",
+            "{\"rating\":%ld,\"message\":\"%s\",\"timestamp\":%llu,\"device_id\":\"%s\"}",
             (long)data.rating,
-            data.message != nullptr ? data.message : "",
-            (unsigned long long)data.timestamp);
+            safe_message,
+            (unsigned long long)data.timestamp,
+            safe_device_id);
     } else {
-        if (data.message != nullptr && strlen(data.message) > 0) {
-            json_len = snprintf(json_string, sizeof(json_string),
-                "{\"rating\":%ld,\"message\":\"%s\"}",
-                (long)data.rating, data.message);
-        } else {
-            json_len = snprintf(json_string, sizeof(json_string),
-                "{\"rating\":%ld}", (long)data.rating);
-        }
+        json_len = snprintf(json_string, sizeof(json_string),
+            "{\"rating\":%ld,\"message\":\"%s\",\"device_id\":\"%s\"}",
+            (long)data.rating,
+            safe_message,
+            safe_device_id);
     }
     
     if (json_len < 0 || json_len >= (int)sizeof(json_string)) {

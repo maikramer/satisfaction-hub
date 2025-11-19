@@ -8,6 +8,8 @@
 #include <cstring>
 
 #include "esp_log.h"
+#include "esp_err.h"
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -84,6 +86,11 @@ AppState current_state = AppState::CALIBRATION;
 int selected_rating = 0;  // 0 = nenhuma, 1-5 = avaliação selecionada
 bool pending_screen_transition = false;  // Flag para transição assíncrona de tela
 uint32_t transition_delay_counter = 0;  // Contador para delay antes da transição
+bool thank_you_return_pending = false;  // Controla retorno automático à tela principal
+uint32_t thank_you_return_counter = 0;  // Contador para delay do retorno automático
+constexpr uint32_t THANK_YOU_RETURN_DELAY_CYCLES = 100;  // 100 ciclos (~10s)
+bool wifi_status_last_connected = false;  // Estado conhecido do WiFi para o ícone
+bool wifi_status_update_pending = false;  // Flag para atualizar ícone após mudança de estado
 
 // Objetos LVGL
 lv_obj_t *question_screen = nullptr;
@@ -93,7 +100,6 @@ lv_obj_t *rating_buttons[5] = {nullptr};
 lv_obj_t *question_label = nullptr;
 lv_obj_t *thank_you_label = nullptr;
 lv_obj_t *thank_you_summary = nullptr;
-lv_obj_t *restart_button = nullptr;
 lv_obj_t *settings_button = nullptr;  // Botão de configurações na tela principal
 lv_obj_t *config_calibrate_button = nullptr;  // Botão de calibração na tela de configurações
 lv_obj_t *wifi_status_icon = nullptr;  // Ícone de status WiFi na tela principal
@@ -168,6 +174,28 @@ constexpr const char *RATING_MESSAGES[] = {
     "muito satisfeito"
 };
 
+static char DEVICE_ID_BUFFER[17] = {0};  // 12 hex chars + null (ex: A1B2C3D4E5F6)
+static bool DEVICE_ID_INITIALIZED = false;
+
+static const char* get_device_id_string() {
+    if (!DEVICE_ID_INITIALIZED) {
+        uint8_t mac[6] = {0};
+        esp_err_t err = esp_efuse_mac_get_default(mac);
+        if (err == ESP_OK) {
+            snprintf(DEVICE_ID_BUFFER, sizeof(DEVICE_ID_BUFFER),
+                     "%02X%02X%02X%02X%02X%02X",
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else {
+            ESP_LOGE(TAG, "Falha ao ler EFUSE MAC: %s", esp_err_to_name(err));
+            strncpy(DEVICE_ID_BUFFER, "UNKNOWN", sizeof(DEVICE_ID_BUFFER) - 1);
+            DEVICE_ID_BUFFER[sizeof(DEVICE_ID_BUFFER) - 1] = '\0';
+        }
+        DEVICE_ID_INITIALIZED = true;
+        ESP_LOGI(TAG, "Device ID definido: %s", DEVICE_ID_BUFFER);
+    }
+    return DEVICE_ID_BUFFER;
+}
+
 // Fontes principais - usando fonte Roboto customizada com suporte a acentos
 // Nota: A fonte atual é 6px (muito pequena). Para melhor legibilidade, 
 // considere gerar versões maiores (16px, 20px, 24px) usando o LVGL Font Converter
@@ -198,6 +226,7 @@ static void send_rating_to_supabase(int rating) {
     rating_data.rating = static_cast<int32_t>(rating);
     rating_data.message = RATING_MESSAGES[rating - 1];  // Mensagem correspondente ao rating
     rating_data.timestamp = 0;  // 0 = usar timestamp do servidor
+    rating_data.device_id = get_device_id_string();
     
     ESP_LOGI(TAG, "Enviando avaliação %d (%s) para Supabase...", rating, rating_data.message);
     
@@ -230,16 +259,6 @@ static void rating_button_cb(lv_event_t *e) {
         // Marcar transição pendente (será processada no update() para evitar problemas de contexto)
         pending_screen_transition = true;
         transition_delay_counter = 0;  // Resetar contador de delay
-    }
-}
-
-// Callback para botão de reiniciar
-static void restart_button_cb(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    
-    if (code == LV_EVENT_CLICKED && current_state == AppState::THANK_YOU) {
-        ESP_LOGI(TAG, "Reiniciando pesquisa...");
-        show_question_screen();
     }
 }
 
@@ -584,8 +603,13 @@ void create_question_screen() {
     lv_obj_center(wifi_label);
     // Usar fonte Montserrat para ícones
     lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_20, 0);
-    // Cor inicial: cinza claro (indefinido) ou vermelho (desconectado)
-    lv_obj_set_style_text_color(wifi_label, lv_color_hex(0x9E9E9E), 0);
+    // Definir cor inicial conforme estado atual do WiFi
+    auto& wifi_mgr = wifi::WiFiManager::instance();
+    bool wifi_connected = wifi_mgr.is_connected();
+    lv_color_t wifi_color = wifi_connected ? lv_color_hex(0x00FF00) : lv_color_hex(0xFF0000);
+    lv_obj_set_style_text_color(wifi_label, wifi_color, 0);
+    wifi_status_last_connected = wifi_connected;
+    wifi_status_update_pending = false;
 
     // Botão de Configurações (dentro do header, à direita)
     if (settings_button != nullptr) {
@@ -746,26 +770,6 @@ void create_thank_you_screen() {
     lv_obj_set_style_pad_bottom(thank_you_summary, 4, 0);
     lv_obj_align(thank_you_summary, LV_ALIGN_TOP_MID, 0, 36);
     
-    // Botão para reiniciar
-    restart_button = lv_button_create(thank_you_screen);
-    lv_obj_set_size(restart_button, 150, 44);
-    lv_obj_align(restart_button, LV_ALIGN_BOTTOM_MID, 0, -16);
-    
-    lv_obj_set_style_bg_color(restart_button, lv_color_hex(0x2196F3), 0); // Azul
-    lv_obj_set_style_bg_opa(restart_button, LV_OPA_COVER, 0);
-    lv_obj_set_style_text_color(restart_button, lv_color_white(), 0);
-    lv_obj_set_style_radius(restart_button, 16, 0);
-    lv_obj_set_style_shadow_color(restart_button, lv_color_hex(0x1976D2), 0);
-    lv_obj_set_style_shadow_width(restart_button, 12, 0);
-    
-    lv_obj_t *restart_label = lv_label_create(restart_button);
-    lv_label_set_text(restart_label, "Nova Avaliação");
-    lv_obj_center(restart_label);
-    lv_obj_set_style_text_font(restart_label, TEXT_FONT, 0);
-    // Adicionar padding ao botão para evitar corte do texto
-    lv_obj_set_style_pad_all(restart_button, 4, 0);
-    
-    lv_obj_add_event_cb(restart_button, restart_button_cb, LV_EVENT_CLICKED, nullptr);
 }
 
 void create_configuration_screen() {
@@ -834,6 +838,14 @@ void create_configuration_screen() {
     auto create_icon_btn = [&](lv_obj_t *parent, const char* icon, const char* text, lv_color_t icon_color, lv_event_cb_t cb) {
         lv_obj_t *btn = lv_button_create(parent);
         lv_obj_add_style(btn, &style_icon_btn, 0);
+        lv_obj_set_style_pad_all(btn, 8, 0);
+        lv_obj_set_style_pad_row(btn, 6, 0);
+        lv_obj_set_size(btn, 85, 85);
+        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(btn,
+                              LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
         
         // Efeito de clique
         lv_obj_set_style_bg_color(btn, lv_color_hex(0xF0F0F0), LV_STATE_PRESSED);
@@ -842,15 +854,16 @@ void create_configuration_screen() {
 
         // Ícone grande
         lv_obj_t *lbl_icon = lv_label_create(btn);
+        lv_obj_set_width(lbl_icon, LV_PCT(100));
         lv_label_set_text(lbl_icon, icon);
         lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_20, 0); // Se tiver 24 ou 28 seria melhor, mas 20 ok
+        lv_obj_set_style_text_align(lbl_icon, LV_TEXT_ALIGN_CENTER, 0);
         // Escalar o ícone se possível ou apenas mudar cor
         lv_obj_set_style_text_color(lbl_icon, icon_color, 0);
-        // Aumentar escala do ícone via transform se fonte for pequena (opcional, lvgl 8/9 suporta)
-        // lv_obj_set_style_transform_zoom(lbl_icon, 384, 0); // 1.5x (256 = 1x)
 
         // Texto
         lv_obj_t *lbl_text = lv_label_create(btn);
+        lv_obj_set_width(lbl_text, LV_PCT(100));
         lv_label_set_text(lbl_text, text);
         lv_obj_set_style_text_font(lbl_text, TEXT_FONT, 0);
         lv_obj_set_style_text_color(lbl_text, lv_color_hex(0x555555), 0);
@@ -923,6 +936,8 @@ void show_configuration_screen() {
 
 void show_thank_you_screen() {
     current_state = AppState::THANK_YOU;
+    thank_you_return_pending = true;
+    thank_you_return_counter = 0;
     
     lvgl_lock();
     
@@ -949,6 +964,8 @@ void show_question_screen() {
     ESP_LOGI(TAG, "show_question_screen() chamado");
     current_state = AppState::QUESTION;
     selected_rating = 0;
+    thank_you_return_pending = false;
+    thank_you_return_counter = 0;
     
     // Sempre recriar a tela para garantir estado limpo e evitar problemas de UI bagunçada
     // especialmente quando voltamos das configurações
@@ -981,13 +998,9 @@ static void update_wifi_status_icon() {
     bool connected = wifi.is_connected();
     
     // Atualizar UI em task separada para evitar stack overflow no contexto de eventos
-    // Usar uma flag estática para rastrear mudanças de estado
-    static bool last_wifi_state = false;
-    static bool update_pending = false;
-    
-    if (connected != last_wifi_state) {
-        update_pending = true;
-        last_wifi_state = connected;
+    if (connected != wifi_status_last_connected) {
+        wifi_status_update_pending = true;
+        wifi_status_last_connected = connected;
         
         // Se WiFi acabou de conectar, criar task para testar Supabase
         if (connected) {
@@ -1010,7 +1023,7 @@ static void update_wifi_status_icon() {
     }
     
     // Atualizar UI apenas se houver mudança pendente
-    if (update_pending) {
+    if (wifi_status_update_pending) {
         // Criar task separada para atualizar UI (evita stack overflow)
         xTaskCreate([](void* arg) {
             lvgl_lock();
@@ -1036,7 +1049,7 @@ static void update_wifi_status_icon() {
             vTaskDelete(nullptr);
         }, "wifi_ui_update", 2048, nullptr, 1, nullptr);
         
-        update_pending = false;
+        wifi_status_update_pending = false;
     }
 }
 
@@ -1060,6 +1073,15 @@ void update() {
         update_wifi_status_icon();
     }
     
+    // Retornar automaticamente para a tela de avaliações após agradecer
+    if (current_state == AppState::THANK_YOU && thank_you_return_pending) {
+        thank_you_return_counter++;
+        if (thank_you_return_counter >= THANK_YOU_RETURN_DELAY_CYCLES) {
+            thank_you_return_pending = false;
+            thank_you_return_counter = 0;
+            show_question_screen();
+        }
+    }
 }
 
 } // namespace

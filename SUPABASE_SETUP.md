@@ -124,7 +124,8 @@ void on_rating_selected(int rating, const char* message) {
     supabase::RatingData data = {
         .rating = rating,
         .message = message,
-        .timestamp = 0  // 0 = usar timestamp do servidor
+    .timestamp = 0,        // 0 = usar timestamp do servidor
+    .device_id = "A1B2C3D4E5F6" // Identificador único do dispositivo
     };
     
     esp_err_t err = supabase.submit_rating(data);
@@ -135,6 +136,8 @@ void on_rating_selected(int rating, const char* message) {
     }
 }
 ```
+
+> 💡 Pode-se gerar `device_id` automaticamente lendo o MAC de fábrica do ESP32 via `esp_efuse_mac_get_default()` e formatando os 6 bytes em hexadecimal (ex.: `A1B2C3D4E5F6`). Esse valor é único por dispositivo.
 
 ## 🧪 Testando a Conexão
 

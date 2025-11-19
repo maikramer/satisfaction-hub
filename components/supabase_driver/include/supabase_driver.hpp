@@ -16,6 +16,7 @@ struct RatingData {
     int32_t rating;      // Avaliação de 1 a 5
     const char* message; // Mensagem associada (ex: "muito satisfeito")
     uint64_t timestamp;  // Timestamp Unix (opcional, pode ser gerado no servidor)
+    const char* device_id; // Identificador único do dispositivo
 };
 
 class SupabaseDriver {
