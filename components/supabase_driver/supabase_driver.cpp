@@ -6,8 +6,9 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_http_client.h"
-#include "nvs_flash.h"
-#include "nvs.h"
+#include "Storage.h"
+#include "ErrorCode.h"
+#include "GeneralErrorCodes.h"
 
 // Incluir configuração se disponível (para desenvolvimento)
 // O arquivo supabase_config.h está no .gitignore e pode não existir em todos os ambientes
@@ -36,7 +37,14 @@ esp_err_t SupabaseDriver::init() {
     
     ESP_LOGI(TAG, "Inicializando driver Supabase...");
     
-    // Tentar carregar credenciais do NVS primeiro
+    // Inicializar Storage (suporta tanto SD quanto NVS)
+    ErrorCode storage_err = Storage::initialize();
+    if (storage_err != CommonErrorCodes::None) {
+        ESP_LOGE(TAG, "Falha ao inicializar Storage: %s", storage_err.description().c_str());
+        return ESP_FAIL;
+    }
+    
+    // Tentar carregar credenciais do Storage primeiro
     esp_err_t ret = load_credentials();
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Credenciais carregadas do NVS");
@@ -94,72 +102,96 @@ esp_err_t SupabaseDriver::set_credentials(const char* url, const char* api_key, 
         config_.table_name[sizeof(config_.table_name) - 1] = '\0';
     }
     
-    // Salvar no NVS
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Erro ao abrir NVS: %s", esp_err_to_name(err));
-        return err;
+    // Salvar no Storage (suporta tanto SD quanto NVS)
+    std::string url_str(config_.url);
+    std::string api_key_str(config_.api_key);
+    std::string table_str(config_.table_name);
+    
+    ErrorCode err = Storage::storeConfig(CONFIG_KEY_URL, url_str, true);
+    if (err != CommonErrorCodes::None) {
+        ESP_LOGE(TAG, "Erro ao salvar URL: %s", err.description().c_str());
+        return ESP_FAIL;
     }
     
-    err = nvs_set_str(handle, NVS_KEY_URL, config_.url);
-    if (err == ESP_OK) {
-        err = nvs_set_str(handle, NVS_KEY_API_KEY, config_.api_key);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_str(handle, NVS_KEY_TABLE, config_.table_name);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
+    err = Storage::storeConfig(CONFIG_KEY_API_KEY, api_key_str, true);
+    if (err != CommonErrorCodes::None) {
+        ESP_LOGE(TAG, "Erro ao salvar API key: %s", err.description().c_str());
+        return ESP_FAIL;
     }
     
-    nvs_close(handle);
-    
-    if (err == ESP_OK) {
-        configured_ = true;
-        ESP_LOGI(TAG, "Credenciais salvas no NVS com sucesso");
-        ESP_LOGI(TAG, "URL: %s", config_.url);
-        ESP_LOGI(TAG, "Tabela: %s", config_.table_name);
-        // Não logar a API key por segurança
-    } else {
-        ESP_LOGE(TAG, "Erro ao salvar credenciais no NVS: %s", esp_err_to_name(err));
+    err = Storage::storeConfig(CONFIG_KEY_TABLE, table_str, true);
+    if (err != CommonErrorCodes::None) {
+        ESP_LOGE(TAG, "Erro ao salvar tabela: %s", err.description().c_str());
+        return ESP_FAIL;
     }
     
-    return err;
+    configured_ = true;
+    ESP_LOGI(TAG, "Credenciais salvas no Storage com sucesso");
+    ESP_LOGI(TAG, "URL: %s", config_.url);
+    ESP_LOGI(TAG, "Tabela: %s", config_.table_name);
+    // Não logar a API key por segurança
+    
+    return ESP_OK;
 }
 
 esp_err_t SupabaseDriver::load_credentials() {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
-    if (err != ESP_OK) {
-        return err;
+    std::string url_str;
+    std::string api_key_str;
+    std::string table_str;
+    
+    // Carregar URL usando Storage
+    ErrorCode err = Storage::loadConfig(CONFIG_KEY_URL, url_str);
+    if (err != CommonErrorCodes::None) {
+        if (err == CommonErrorCodes::FileNotFound || err == CommonErrorCodes::FileIsEmpty) {
+            return ESP_ERR_NOT_FOUND;
+        }
+        ESP_LOGE(TAG, "Erro ao carregar URL: %s", err.description().c_str());
+        return ESP_FAIL;
     }
     
-    size_t required_size = sizeof(config_.url);
-    err = nvs_get_str(handle, NVS_KEY_URL, config_.url, &required_size);
-    if (err != ESP_OK) {
-        nvs_close(handle);
-        return err;
+    // Carregar API key
+    err = Storage::loadConfig(CONFIG_KEY_API_KEY, api_key_str);
+    if (err != CommonErrorCodes::None) {
+        ESP_LOGE(TAG, "Erro ao carregar API key: %s", err.description().c_str());
+        return ESP_FAIL;
     }
     
-    required_size = sizeof(config_.api_key);
-    err = nvs_get_str(handle, NVS_KEY_API_KEY, config_.api_key, &required_size);
-    if (err != ESP_OK) {
-        nvs_close(handle);
-        return err;
-    }
-    
-    required_size = sizeof(config_.table_name);
-    err = nvs_get_str(handle, NVS_KEY_TABLE, config_.table_name, &required_size);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
+    // Carregar tabela (opcional - pode não existir)
+    err = Storage::loadConfig(CONFIG_KEY_TABLE, table_str);
+    if (err == CommonErrorCodes::FileNotFound || err == CommonErrorCodes::FileIsEmpty) {
         // Tabela não configurada, usar padrão
-        strncpy(config_.table_name, "ratings", sizeof(config_.table_name) - 1);
-        config_.table_name[sizeof(config_.table_name) - 1] = '\0';
-        err = ESP_OK;
+        table_str = "ratings";
+    } else if (err != CommonErrorCodes::None) {
+        ESP_LOGE(TAG, "Erro ao carregar tabela: %s", err.description().c_str());
+        return ESP_FAIL;
     }
     
-    nvs_close(handle);
-    return err;
+    // Copiar valores para config_
+    if (url_str.length() < sizeof(config_.url)) {
+        strncpy(config_.url, url_str.c_str(), sizeof(config_.url) - 1);
+        config_.url[sizeof(config_.url) - 1] = '\0';
+    } else {
+        ESP_LOGE(TAG, "URL muito longa");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    
+    if (api_key_str.length() < sizeof(config_.api_key)) {
+        strncpy(config_.api_key, api_key_str.c_str(), sizeof(config_.api_key) - 1);
+        config_.api_key[sizeof(config_.api_key) - 1] = '\0';
+    } else {
+        ESP_LOGE(TAG, "API key muito longa");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    
+    if (table_str.length() < sizeof(config_.table_name)) {
+        strncpy(config_.table_name, table_str.c_str(), sizeof(config_.table_name) - 1);
+        config_.table_name[sizeof(config_.table_name) - 1] = '\0';
+    } else {
+        ESP_LOGE(TAG, "Nome da tabela muito longo");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    
+    return ESP_OK;
 }
 
 namespace {

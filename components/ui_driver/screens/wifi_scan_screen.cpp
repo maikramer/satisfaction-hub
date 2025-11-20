@@ -1,7 +1,7 @@
 #include "screens/wifi_scan_screen.hpp"
 #include "ui_common.hpp"
 #include "ui_common_internal.hpp"
-#include "wifi_manager.hpp"
+#include "WiFiManager.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include <cstring>
@@ -130,7 +130,7 @@ void show_wifi_scan_screen(WiFiScanCallback on_select) {
     
     // Fazer scan
     wifi_ap_record_t ap_records[20];
-    auto& wifi = wifi::WiFiManager::instance();
+    auto& wifi = WiFiManager::instance();
     network_count = wifi.scan(ap_records, 20);
     
     lvgl_lock();

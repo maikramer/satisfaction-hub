@@ -7,3 +7,10 @@ dependencies:
   lvgl/lvgl: ^9.4.0
   # Driver ILI9341 para ESP-IDF
   espressif/esp_lcd_ili9341: ^2.0.0
+  johboh/nlohmann-json: ^3.12.0
+  # Componente Wifi do esp_components
+  Wifi:
+    path: ../../esp_components/Wifi
+  # Componente Storage do esp_components
+  Storage:
+    path: ../../esp_components/Storage

@@ -3,7 +3,7 @@
 #include "screens/wifi_scan_screen.hpp"
 #include "ui_common.hpp"
 #include "ui_common_internal.hpp"
-#include "wifi_manager.hpp"
+#include "WiFiManager.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include "widgets/textarea/lv_textarea.h"
@@ -66,7 +66,7 @@ static void connect_button_cb(lv_event_t* e) {
             strncpy(password, current_password, sizeof(password) - 1);
             password[sizeof(password) - 1] = '\0';
             
-            auto& wifi = wifi::WiFiManager::instance();
+            auto& wifi = WiFiManager::instance();
             esp_err_t err = wifi.connect(ssid, password);
             
             lvgl_lock();
@@ -167,7 +167,7 @@ void create_wifi_config_screen() {
     lv_label_set_text(ssid_label_display, "Toque para escanear");
     
     // Carregar SSID salvo se existir
-    auto& wifi = wifi::WiFiManager::instance();
+    auto& wifi = WiFiManager::instance();
     if (wifi.is_connected() || strlen(wifi.config().ssid) > 0) {
         strncpy(current_ssid, wifi.config().ssid, sizeof(current_ssid) - 1);
         lv_label_set_text(ssid_label_display, current_ssid);

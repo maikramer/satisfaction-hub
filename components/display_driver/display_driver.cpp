@@ -770,6 +770,7 @@ esp_err_t DisplayDriver::set_brightness(uint8_t brightness) {
     // Se não estiver em modo automático, atualizar brilho manual também
     if (!auto_brightness_enabled_) {
         manual_brightness_ = brightness;
+        // Não salvar aqui - será salvo via debounce após 1s sem modificação
     }
     
     ESP_LOGD(TAG, "Brilho definido para %d%% (duty: %lu)", brightness, duty);

@@ -78,6 +78,12 @@ public:
      */
     uint16_t get_ldr_value() const { return last_ldr_value_; }
 
+    /**
+     * @brief Salva as configurações de brilho no NVS.
+     * Público para permitir salvamento via timer de debounce.
+     */
+    void save_brightness_settings();
+
 private:
     DisplayDriver() = default;
 
@@ -94,7 +100,6 @@ private:
     static void brightness_update_task(void *pvParameters);
     void update_auto_brightness();
     void load_brightness_settings();
-    void save_brightness_settings();
 
     bool initialized_ = false;
     bool spi_initialized_ = false;

@@ -1,6 +1,9 @@
 #include "screens/password_screen.hpp"
 #include "ui_common.hpp"
 #include "ui_common_internal.hpp"
+#include "Storage.h"
+#include "ErrorCode.h"
+#include "GeneralErrorCodes.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include <string>
@@ -11,9 +14,45 @@ namespace screens {
 
 static const char* TAG = "PasswordScreen";
 
-// Configuração da senha
-// TODO: Mover para configuração persistente no futuro
-static std::string s_current_password = "0523";
+// Configuração da senha (será carregada do NVS ou usar padrão)
+static std::string s_current_password = "0523"; // Padrão se não houver no NVS
+
+// Chave para persistência da senha usando Storage
+static constexpr const char* CONFIG_KEY_PASSWORD = "login_password";
+
+// Função para carregar senha do Storage
+static void load_password_from_storage() {
+    std::string saved_password;
+    ErrorCode err = Storage::loadConfig(CONFIG_KEY_PASSWORD, saved_password);
+    if (err == CommonErrorCodes::None) {
+        s_current_password = saved_password;
+        ESP_LOGI(TAG, "Senha carregada do Storage");
+    } else if (err == CommonErrorCodes::FileNotFound || err == CommonErrorCodes::FileIsEmpty) {
+        ESP_LOGI(TAG, "Senha não encontrada no Storage, usando padrão");
+        // Salvar senha padrão no Storage
+        ErrorCode save_err = Storage::storeConfig(CONFIG_KEY_PASSWORD, s_current_password, true);
+        if (save_err == CommonErrorCodes::None) {
+            ESP_LOGI(TAG, "Senha padrão salva no Storage");
+        } else {
+            ESP_LOGW(TAG, "Erro ao salvar senha padrão: %s", save_err.description().c_str());
+        }
+    } else {
+        ESP_LOGW(TAG, "Erro ao carregar senha do Storage: %s, usando padrão", err.description().c_str());
+    }
+}
+
+// Função para salvar senha no Storage
+static bool save_password_to_storage(const std::string& password) {
+    ErrorCode err = Storage::storeConfig(CONFIG_KEY_PASSWORD, password, true);
+    if (err == CommonErrorCodes::None) {
+        s_current_password = password;
+        ESP_LOGI(TAG, "Senha salva no Storage com sucesso");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "Erro ao salvar senha no Storage: %s", err.description().c_str());
+        return false;
+    }
+}
 
 static lv_obj_t* password_screen = nullptr;
 static lv_obj_t* display_label = nullptr;  // Mostra asteriscos
@@ -235,6 +274,19 @@ static void back_click_cb(lv_event_t* e) {
 void show_password_screen(PasswordSuccessCallback on_success, PasswordCancelCallback on_cancel) {
     ESP_LOGI(TAG, "show_password_screen chamado");
     
+    // Carregar senha do Storage na primeira vez
+    static bool password_loaded = false;
+    if (!password_loaded) {
+        // Garantir que Storage está inicializado
+        ErrorCode storage_err = Storage::initialize();
+        if (storage_err == CommonErrorCodes::None) {
+            load_password_from_storage();
+            password_loaded = true;
+        } else {
+            ESP_LOGW(TAG, "Storage não inicializado, usando senha padrão");
+        }
+    }
+    
     s_on_success = on_success;
     s_on_cancel = on_cancel;
     s_input_buffer.clear();
@@ -381,6 +433,27 @@ void hide_password_screen() {
 
 bool is_password_screen_visible() {
     return password_screen != nullptr;
+}
+
+bool set_password(const std::string& new_password) {
+    // Validar tamanho mínimo da senha
+    if (new_password.length() < 4) {
+        ESP_LOGE(TAG, "Senha muito curta (mínimo 4 caracteres)");
+        return false;
+    }
+    
+    // Garantir que Storage está inicializado
+    ErrorCode storage_err = Storage::initialize();
+    if (storage_err != CommonErrorCodes::None) {
+        ESP_LOGE(TAG, "Storage não inicializado: %s", storage_err.description().c_str());
+        return false;
+    }
+    
+    return save_password_to_storage(new_password);
+}
+
+std::string get_password() {
+    return s_current_password;
 }
 
 } // namespace screens

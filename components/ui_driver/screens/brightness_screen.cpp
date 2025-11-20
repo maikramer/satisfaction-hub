@@ -2,7 +2,11 @@
 #include "ui_common.hpp"
 #include "display_driver.hpp"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "lvgl.h"
+#include "src/widgets/slider/lv_slider.h"
+#include "src/widgets/switch/lv_switch.h"
+#include "src/widgets/bar/lv_bar.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -25,6 +29,7 @@ static lv_obj_t* brightness_auto_switch = nullptr;
 static lv_obj_t* brightness_slider = nullptr;
 static lv_obj_t* brightness_value_label = nullptr;
 static lv_obj_t* brightness_ldr_label = nullptr;
+static esp_timer_handle_t brightness_save_timer = nullptr;
 
 // Função helper para lock/unlock LVGL (definidas em ui_driver.cpp)
 // Como estão no namespace anônimo, precisamos usar uma abordagem diferente
@@ -74,10 +79,21 @@ static void brightness_auto_switch_cb(lv_event_t *e) {
     }
 }
 
+// Callback do timer para salvar brilho após 1s sem modificação
+static void brightness_save_timer_cb(void* arg) {
+    auto &display = DisplayDriver::instance();
+    if (!display.is_auto_brightness_enabled()) {
+        display.save_brightness_settings();
+        ESP_LOGI(TAG, "Brilho salvo após 1s sem modificação");
+    }
+}
+
 static void brightness_slider_cb(lv_event_t *e) {
-    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
-        // Usar lv_bar_get_value já que slider é baseado em bar no LVGL v9
-        int32_t value = lv_bar_get_value(brightness_slider);
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        // Usar lv_slider_get_value para sliders no LVGL v9
+        int32_t value = lv_slider_get_value(brightness_slider);
         auto &display = DisplayDriver::instance();
         display.set_brightness(static_cast<uint8_t>(value));
         
@@ -86,7 +102,13 @@ static void brightness_slider_cb(lv_event_t *e) {
             lv_label_set_text_fmt(brightness_value_label, "Brilho: %ld%%", static_cast<long>(value));
         }
         
-        ESP_LOGI(TAG, "Brilho manual ajustado para %ld%%", static_cast<long>(value));
+        ESP_LOGD(TAG, "Brilho manual ajustado para %ld%%", static_cast<long>(value));
+        
+        // Reiniciar timer de salvamento (debounce de 1s)
+        if (brightness_save_timer != nullptr) {
+            esp_timer_stop(brightness_save_timer);
+            esp_timer_start_once(brightness_save_timer, 1000000); // 1 segundo em microsegundos
+        }
     }
 }
 
@@ -136,6 +158,22 @@ void show_brightness_screen() {
     
     brightness_lvgl_lock();
     
+    // Criar timer de salvamento se não existir
+    if (brightness_save_timer == nullptr) {
+        esp_timer_create_args_t timer_args = {
+            .callback = brightness_save_timer_cb,
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "brightness_save",
+            .skip_unhandled_events = false
+        };
+        esp_err_t ret = esp_timer_create(&timer_args, &brightness_save_timer);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Erro ao criar timer de salvamento: %s", esp_err_to_name(ret));
+            brightness_save_timer = nullptr;
+        }
+    }
+    
     // Limpar tela anterior se existir
     if (brightness_screen != nullptr) {
         lv_obj_del(brightness_screen);
@@ -178,7 +216,7 @@ void show_brightness_screen() {
     lv_obj_set_size(brightness_slider, 280, 20);
     lv_obj_align(brightness_slider, LV_ALIGN_TOP_MID, 0, current_y);
     lv_slider_set_range(brightness_slider, 5, 100);
-    lv_bar_set_value(brightness_slider, display.get_brightness(), LV_ANIM_OFF);
+    lv_slider_set_value(brightness_slider, display.get_brightness(), LV_ANIM_OFF);
     
     // Ocultar slider se estiver em modo automático
     if (display.is_auto_brightness_enabled()) {

@@ -2,6 +2,7 @@
 
 #include "lvgl.h"
 #include <functional>
+#include <string>
 
 namespace ui {
 namespace screens {
@@ -29,7 +30,21 @@ void hide_password_screen();
  */
 bool is_password_screen_visible();
 
+/**
+ * @brief Define uma nova senha e salva no NVS
+ * @param new_password Nova senha a ser salva
+ * @return true se a senha foi salva com sucesso, false caso contrário
+ */
+bool set_password(const std::string& new_password);
+
+/**
+ * @brief Obtém a senha atual (do cache, não do NVS)
+ * @return Senha atual
+ */
+std::string get_password();
+
 } // namespace screens
 } // namespace ui
+
 
 

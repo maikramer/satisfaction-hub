@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include "esp_err.h"
+#include "Storage.h"
 
 namespace supabase {
 
@@ -54,10 +55,9 @@ private:
     bool configured_ = false;
     SupabaseConfig config_ = {};
     
-    static constexpr const char* NVS_NAMESPACE = "supabase";
-    static constexpr const char* NVS_KEY_URL = "url";
-    static constexpr const char* NVS_KEY_API_KEY = "api_key";
-    static constexpr const char* NVS_KEY_TABLE = "table";
+    static constexpr const char* CONFIG_KEY_URL = "supabase_url";
+    static constexpr const char* CONFIG_KEY_API_KEY = "supabase_api_key";
+    static constexpr const char* CONFIG_KEY_TABLE = "supabase_table";
 };
 
 } // namespace supabase

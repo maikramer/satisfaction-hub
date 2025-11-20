@@ -1,4 +1,56 @@
 dependencies:
+  Connection:
+    dependencies:
+    - name: utility
+      path: ../utility
+    - name: JsonModels
+      path: ../JsonModels
+    source:
+      path: /home/maikeu/Embedded/ESP32/esp_components/Connection
+      type: local
+    version: 1.0.0
+  ErrorCodes:
+    dependencies:
+    - name: utility
+      path: ../utility
+    source:
+      path: /home/maikeu/Embedded/ESP32/esp_components/ErrorCodes
+      type: local
+    version: 1.0.0
+  JsonModels:
+    dependencies:
+    - name: johboh/nlohmann-json
+      version: ^3.12.0
+    - name: utility
+      path: ../utility
+    - name: ErrorCodes
+      path: ../ErrorCodes
+    source:
+      path: /home/maikeu/Embedded/ESP32/esp_components/JsonModels
+      type: local
+    version: 1.0.0
+  Storage:
+    dependencies:
+    - name: utility
+      path: ../utility
+    - name: JsonModels
+      path: ../JsonModels
+    source:
+      path: /home/maikeu/Embedded/ESP32/esp_components/Storage
+      type: local
+    version: 1.0.0
+  Wifi:
+    dependencies:
+    - name: utility
+      path: ../utility
+    - name: Connection
+      path: ../Connection
+    - name: ErrorCodes
+      path: ../ErrorCodes
+    source:
+      path: /home/maikeu/Embedded/ESP32/esp_components/Wifi
+      type: local
+    version: 1.0.0
   espressif/cmake_utilities:
     component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
@@ -27,6 +79,16 @@ dependencies:
     source:
       type: idf
     version: 6.0.0
+  johboh/nlohmann-json:
+    component_hash: 2a97e10124d755da820b0381e36a9a6504574328f262964ccea3f8b2f228fc66
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 3.12.0
   lvgl/lvgl:
     component_hash: 17e68bfd21f0edf4c3ee838e2273da840bf3930e5dbc3bfa6c1190c3aed41f9f
     dependencies: []
@@ -34,10 +96,21 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.4.0
+  utility:
+    dependencies:
+    - name: johboh/nlohmann-json
+      version: ^3.12.0
+    source:
+      path: /home/maikeu/Embedded/ESP32/esp_components/utility
+      type: local
+    version: 1.0.0
 direct_dependencies:
+- Storage
+- Wifi
 - espressif/esp_lcd_ili9341
 - idf
+- johboh/nlohmann-json
 - lvgl/lvgl
-manifest_hash: b804673f795fee3bf4e4988694a109362f526e5f0270274578768ec7e4e94b15
+manifest_hash: db4f24ef66348ac51405c763f042b46c3f81559395454e3a0bcaa0bba4de6351
 target: esp32
 version: 2.0.0

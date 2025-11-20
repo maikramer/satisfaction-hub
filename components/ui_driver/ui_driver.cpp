@@ -19,7 +19,7 @@
 #include "freertos/semphr.h"
 #include "lvgl.h"
 #include "display_driver.hpp"
-#include "wifi_manager.hpp"
+#include "WiFiManager.h"
 #include "supabase_driver.hpp"
 
 // Declarar fonte Roboto customizada (suporta acentos portugueses)
@@ -228,7 +228,7 @@ static const char* get_device_id_string() {
 
 // Função para enviar avaliação ao Supabase
 static void send_rating_to_supabase(int rating) {
-    auto& wifi = wifi::WiFiManager::instance();
+    auto& wifi = WiFiManager::instance();
     if (!wifi.is_connected()) {
         ESP_LOGW(TAG, "WiFi não conectado - avaliação não será enviada ao Supabase");
         return;
@@ -642,7 +642,7 @@ void create_question_screen() {
     // Usar fonte Montserrat para ícones
     lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_20, 0);
     // Definir cor inicial conforme estado atual do WiFi
-    auto& wifi_mgr = wifi::WiFiManager::instance();
+    auto& wifi_mgr = WiFiManager::instance();
     bool wifi_connected = wifi_mgr.is_connected();
     lv_color_t wifi_color = wifi_connected ? ::ui::common::COLOR_SUCCESS() : ::ui::common::COLOR_ERROR();
     lv_obj_set_style_text_color(wifi_label, wifi_color, 0);
@@ -1019,7 +1019,7 @@ static void update_wifi_status_icon() {
     }
     
     // Verificar estado WiFi (operação leve, não precisa de lock)
-    auto& wifi = wifi::WiFiManager::instance();
+    auto& wifi = WiFiManager::instance();
     bool connected = wifi.is_connected();
     
     // Atualizar UI em task separada para evitar stack overflow no contexto de eventos
@@ -1056,7 +1056,7 @@ static void update_wifi_status_icon() {
             // Encontrar o label dentro do botão (primeiro filho)
             lv_obj_t* wifi_label = lv_obj_get_child(wifi_status_icon, 0);
             if (wifi_label != nullptr) {
-                auto& wifi = wifi::WiFiManager::instance();
+                auto& wifi = WiFiManager::instance();
                 bool connected = wifi.is_connected();
                 
                 // Atualizar cor: verde se conectado, vermelho se desconectado
@@ -1170,7 +1170,7 @@ void init(lv_display_t *display) {
     lvgl_unlock();
     
     // Inicializar WiFi Manager
-    auto& wifi = wifi::WiFiManager::instance();
+    auto& wifi = WiFiManager::instance();
     wifi.init();
     
     // Inicializar Supabase Driver

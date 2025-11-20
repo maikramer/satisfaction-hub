@@ -21,3 +21,4 @@ __pycache__/
 
 # Arquivo de configuração do Supabase (contém credenciais sensíveis)
 supabase_config.h
+managed_components/
