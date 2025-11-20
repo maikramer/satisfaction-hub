@@ -128,10 +128,9 @@ static void show_error_dialog(const char* message) {
     lv_label_set_long_mode(msg_label, LV_LABEL_LONG_WRAP);
     lv_obj_align(msg_label, LV_ALIGN_TOP_MID, 0, 10);
     
-    // Botão OK
-    lv_obj_t* ok_btn = common::create_button(error_dialog, "OK", 80, common::COLOR_BUTTON_GRAY(), 32);
+    // Botão OK - usando função padronizada compacta
+    lv_obj_t* ok_btn = common::create_compact_button(error_dialog, "OK", common::COLOR_BUTTON_GRAY(), close_error_dialog_cb);
     lv_obj_align(ok_btn, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(ok_btn, close_error_dialog_cb, LV_EVENT_CLICKED, nullptr);
     
     // Auto-fechar após 2 segundos usando timer
     lv_timer_t* timer = lv_timer_create(error_dialog_timer_cb, 2000, nullptr);

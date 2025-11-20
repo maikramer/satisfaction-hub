@@ -66,7 +66,19 @@ void apply_screen_style(lv_obj_t* screen);
 // Helpers para criação consistente de UI
 lv_obj_t* create_screen_title(lv_obj_t* parent, const char* text);
 lv_obj_t* create_button(lv_obj_t* parent, const char* text, int32_t width = 0, lv_color_t color = COLOR_BUTTON_GRAY(), int32_t height = BUTTON_HEIGHT);
+
+// Botão de ação principal (Conectar, OK principal, Confirmar, etc.) - Padronizado
+lv_obj_t* create_action_button(lv_obj_t* parent, const char* text, lv_color_t color, lv_event_cb_t event_cb);
+// Versão com offset X customizado (para dois botões lado a lado)
+lv_obj_t* create_action_button(lv_obj_t* parent, const char* text, lv_color_t color, lv_event_cb_t event_cb, int32_t offset_x);
+
+// Botão compacto (para casos especiais como input_screen, dialogs pequenos) - Padronizado
+lv_obj_t* create_compact_button(lv_obj_t* parent, const char* text, lv_color_t color, lv_event_cb_t event_cb);
+
+// Versão padrão: alinhado ao centro inferior
 lv_obj_t* create_back_button(lv_obj_t* parent, lv_event_cb_t event_cb);
+// Versão com offset X customizado (para casos especiais como dois botões lado a lado)
+lv_obj_t* create_back_button(lv_obj_t* parent, lv_event_cb_t event_cb, int32_t offset_x);
 
 } // namespace common
 } // namespace ui

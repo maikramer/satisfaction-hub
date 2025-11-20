@@ -159,19 +159,14 @@ void show_input_screen(
     }
     #endif
     
-    // Botões OK e Cancelar pequenos e horizontais (com texto) - acima do teclado
-    // Usar altura compacta de 28px
-    ok_button = common::create_button(input_screen, "OK", 80, common::COLOR_BUTTON_BLUE(), 28);
+    // Botões OK e Cancelar compactos - usando funções padronizadas
     // Posicionar acima do teclado (que está no bottom)
+    ok_button = common::create_compact_button(input_screen, "OK", common::COLOR_BUTTON_BLUE(), ok_button_cb);
     lv_obj_align(ok_button, LV_ALIGN_BOTTOM_MID, -50, -125);
     
-    lv_obj_add_event_cb(ok_button, ok_button_cb, LV_EVENT_CLICKED, nullptr);
-    
-    // Botão Cancelar
-    cancel_button = common::create_button(input_screen, "Cancelar", 80, common::COLOR_BUTTON_GRAY(), 28);
+    // Botão Cancelar - compacto, alinhado ao lado do OK
+    cancel_button = common::create_compact_button(input_screen, "Cancelar", common::COLOR_BUTTON_GRAY(), cancel_button_cb);
     lv_obj_align_to(cancel_button, ok_button, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
-    
-    lv_obj_add_event_cb(cancel_button, cancel_button_cb, LV_EVENT_CLICKED, nullptr);
     
     // Callback para mostrar/esconder teclado quando o textarea ganha/perde foco
     lv_obj_add_event_cb(input_textarea, [](lv_event_t* e) {

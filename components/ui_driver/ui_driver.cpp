@@ -682,24 +682,44 @@ void create_question_screen() {
     // Mover texto mais para baixo para dar espaço ao header
     lv_obj_align(question_label, LV_ALIGN_TOP_MID, 0, ::ui::common::HEADER_HEIGHT + 15);
 
-    // Botões posicionados manualmente - layout simples e direto
-    // 5 botões de 50px cada = 250px
-    // Espaço disponível: 320px - 20px (margens) = 300px
-    // Espaçamento: (300 - 250) / 4 = 12.5px entre botões
-    constexpr int BTN_SIZE = 50;
-    constexpr int BTN_SPACING = 12;
-    // Calcular posição inicial para centralizar os botões
-    // Total de largura: 5 * BTN_SIZE + 4 * BTN_SPACING = 250 + 48 = 298px
-    // Posição inicial: (320 - 298) / 2 = 11px
-    constexpr int BTN_START_X = 11;
-    constexpr int BTN_Y = 140; // Um pouco mais baixo para dar espaço ao texto
+    // Botões organizados em 2 fileiras: 123 e 45
+    // Fileira 1: botões 1, 2, 3
+    // Fileira 2: botões 4, 5
+    // Todos igualmente espaçados
+    constexpr int BTN_SIZE = 66;  // Reduzido de 70 para 60 para caber na vertical
+    constexpr int BTN_SPACING = 20;  // Espaçamento reduzido de 30 para 20
+    constexpr int ROW_SPACING = 6;  // Espaçamento vertical reduzido de 30 para 15
     
-    ESP_LOGI(TAG, "Criando %d botões...", 5);
-    ESP_LOGI(TAG, "Botões: tamanho=%d, espaçamento=%d, start_x=%d, y=%d", 
-             BTN_SIZE, BTN_SPACING, BTN_START_X, BTN_Y);
+    // Calcular posições para centralizar cada fileira
+    // Fileira 1: 3 botões
+    // Total largura fileira 1: 3 * BTN_SIZE + 2 * BTN_SPACING = 180 + 40 = 220px
+    constexpr int ROW1_START_X = (320 - (3 * BTN_SIZE + 2 * BTN_SPACING)) / 2;
+    constexpr int ROW1_Y = 96; // Subido de 140 para 90 para caber as duas fileiras
+    
+    // Fileira 2: 2 botões
+    // Total largura fileira 2: 2 * BTN_SIZE + 1 * BTN_SPACING = 120 + 20 = 140px
+    constexpr int ROW2_START_X = (320 - (2 * BTN_SIZE + 1 * BTN_SPACING)) / 2;
+    constexpr int ROW2_Y = ROW1_Y + BTN_SIZE + ROW_SPACING; // 90 + 60 + 15 = 165 -> Fim em 225px (dentro dos 240px)
+    
+    ESP_LOGI(TAG, "Criando %d botões em 2 fileiras...", 5);
+    ESP_LOGI(TAG, "Botões: tamanho=%d, espaçamento=%d", BTN_SIZE, BTN_SPACING);
+    ESP_LOGI(TAG, "Fileira 1: start_x=%d, y=%d", ROW1_START_X, ROW1_Y);
+    ESP_LOGI(TAG, "Fileira 2: start_x=%d, y=%d", ROW2_START_X, ROW2_Y);
+    
     for (int i = 0; i < 5; i++) {
-        int btn_x = BTN_START_X + i * (BTN_SIZE + BTN_SPACING);
-        ESP_LOGI(TAG, "Criando botão %d em posição (%d, %d)...", i, btn_x, BTN_Y);
+        int btn_x, btn_y;
+        
+        if (i < 3) {
+            // Fileira 1: botões 0, 1, 2 (1, 2, 3)
+            btn_x = ROW1_START_X + i * (BTN_SIZE + BTN_SPACING);
+            btn_y = ROW1_Y;
+        } else {
+            // Fileira 2: botões 3, 4 (4, 5)
+            btn_x = ROW2_START_X + (i - 3) * (BTN_SIZE + BTN_SPACING);
+            btn_y = ROW2_Y;
+        }
+        
+        ESP_LOGI(TAG, "Criando botão %d em posição (%d, %d)...", i, btn_x, btn_y);
         // Criar botão diretamente na tela, sem container intermediário
         rating_buttons[i] = lv_button_create(question_screen);
         
@@ -708,7 +728,7 @@ void create_question_screen() {
         
         // Tamanho fixo e posição absoluta
         lv_obj_set_size(rating_buttons[i], BTN_SIZE, BTN_SIZE);
-        lv_obj_set_pos(rating_buttons[i], btn_x, BTN_Y);
+        lv_obj_set_pos(rating_buttons[i], btn_x, btn_y);
         
         // Estilo mínimo: apenas cor de fundo e borda
         lv_obj_set_style_bg_color(rating_buttons[i], RATING_COLORS[i], 0);
@@ -739,7 +759,7 @@ void create_question_screen() {
                            reinterpret_cast<void*>(static_cast<intptr_t>(i + 1)));
         
         ESP_LOGI(TAG, "Botão %d criado: %p, posição (%d,%d), tamanho %dx%d", 
-                 i, rating_buttons[i], btn_x, BTN_Y, BTN_SIZE, BTN_SIZE);
+                 i, rating_buttons[i], btn_x, btn_y, BTN_SIZE, BTN_SIZE);
         
         // Invalidar cada botão para garantir renderização
         lv_obj_invalidate(rating_buttons[i]);
@@ -806,112 +826,95 @@ void create_configuration_screen() {
     lv_obj_remove_style_all(configuration_screen);
     ::ui::common::apply_screen_style(configuration_screen);
     
-    // Container principal com layout flex
-    lv_obj_t *main_cont = lv_obj_create(configuration_screen);
-    lv_obj_remove_style_all(main_cont);
-    lv_obj_set_size(main_cont, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_flex_flow(main_cont, LV_FLEX_FLOW_COLUMN);
-    // Alinhamento: START verticalmente (topo), CENTER horizontalmente (centro)
-    lv_obj_set_flex_align(main_cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(main_cont, 4, 0); // Padding reduzido para compactar
-    lv_obj_set_style_pad_row(main_cont, 4, 0); // Espaçamento reduzido entre elementos
-
-    // Título usando helper (mas dentro do container flex)
-    lv_obj_t *title_label = lv_label_create(main_cont);
+    // Título posicionado no topo
+    lv_obj_t *title_label = lv_label_create(configuration_screen);
     lv_label_set_text(title_label, "Configurações");
-    lv_obj_set_width(title_label, LV_PCT(100)); // Garantir largura total para centralização do texto
+    lv_obj_set_width(title_label, LV_PCT(100));
     lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(title_label, ::ui::common::COLOR_TEXT_BLACK(), 0);
     lv_obj_set_style_text_font(title_label, ::ui::common::TITLE_FONT, 0);
-    lv_obj_set_style_pad_bottom(title_label, 4, 0); // Espaço reduzido abaixo do título
-    lv_obj_set_height(title_label, LV_SIZE_CONTENT); // Altura baseada no conteúdo
+    lv_obj_set_height(title_label, LV_SIZE_CONTENT);
+    // Posicionar título no topo, com margem confortável
+    lv_obj_align(title_label, LV_ALIGN_TOP_MID, 0, 10);
     
-    // Container para os ícones (2 fileiras de 3 ícones)
-    lv_obj_t *icons_cont = lv_obj_create(main_cont);
+    // Container para os ícones (2 fileiras) - Centralizado na tela
+    lv_obj_t *icons_cont = lv_obj_create(configuration_screen);
     lv_obj_remove_style_all(icons_cont);
     lv_obj_set_width(icons_cont, LV_PCT(100));
-    // Altura automática mas com flex grow para ocupar espaço vertical disponível
     lv_obj_set_height(icons_cont, LV_SIZE_CONTENT); 
-    lv_obj_set_flex_flow(icons_cont, LV_FLEX_FLOW_COLUMN); // Fileiras verticais
-    // Alinhamento: CENTER verticalmente e horizontalmente
+    lv_obj_set_flex_flow(icons_cont, LV_FLEX_FLOW_COLUMN);
+    // Alinhar conteúdo no centro
     lv_obj_set_flex_align(icons_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(icons_cont, 0, 0); // Sem padding interno
-    lv_obj_set_style_pad_row(icons_cont, 8, 0); // Espaçamento de 4px entre fileiras
-    lv_obj_set_style_pad_gap(icons_cont, 8, 0); // Gap adicional de 4px
-    lv_obj_set_style_flex_grow(icons_cont, 1, 0); // Expandir para ocupar espaço disponível
-    // Adicionar padding inferior para reservar espaço para o botão voltar (que está fixo)
-    // Altura botão (38) + padding tela (4) + margem segurança (~8) = ~50px
-    lv_obj_set_style_pad_bottom(icons_cont, 50, 0);
+    lv_obj_set_style_pad_all(icons_cont, 0, 0);
+    lv_obj_set_style_pad_row(icons_cont, 0, 0); // Espaçamento mínimo entre fileiras (reduzido mais 6px)
+    // Centralizar container na tela
+    lv_obj_align(icons_cont, LV_ALIGN_CENTER, 0, 0);
 
-    // Estilo para botões de ícone (apenas ícone, sem texto)
+    // Estilo para botões de ícone (Redondos, Claros, Simétricos)
     static lv_style_t style_icon_btn;
     static bool style_icon_init = false;
     if (!style_icon_init) {
         lv_style_init(&style_icon_btn);
-        // Tamanho menor para caber 3 por fileira: (320 - padding*2 - gap*2) / 3 ≈ 90px
-        lv_style_set_width(&style_icon_btn, 80); // Reduzido levemente
-        lv_style_set_height(&style_icon_btn, 60); // Mais compacto verticalmente
-        lv_style_set_bg_color(&style_icon_btn, lv_color_hex(0xF5F5F5)); // Fundo cinza claro para contraste
+        // Botões redondos de 60px (reduzido de 64 para evitar sobreposição)
+        lv_style_set_width(&style_icon_btn, 60); 
+        lv_style_set_height(&style_icon_btn, 60); 
+        lv_style_set_bg_color(&style_icon_btn, lv_color_hex(0xFFFFFF)); // Branco puro
         lv_style_set_bg_opa(&style_icon_btn, LV_OPA_COVER);
-        lv_style_set_radius(&style_icon_btn, 10);
+        lv_style_set_radius(&style_icon_btn, LV_RADIUS_CIRCLE); // Redondo
         
-        // Borda sutil para definição
-        lv_style_set_border_width(&style_icon_btn, 1);
-        lv_style_set_border_color(&style_icon_btn, lv_color_hex(0xE0E0E0));
-        lv_style_set_border_opa(&style_icon_btn, LV_OPA_COVER);
-
-        lv_style_set_shadow_width(&style_icon_btn, 10);
+        // Sombra suave
+        lv_style_set_shadow_width(&style_icon_btn, 15);
         lv_style_set_shadow_color(&style_icon_btn, lv_color_hex(0x000000));
-        lv_style_set_shadow_opa(&style_icon_btn, 15);
+        lv_style_set_shadow_opa(&style_icon_btn, 20);
         lv_style_set_shadow_offset_y(&style_icon_btn, 3);
         
-        // Layout interno: apenas centralizar ícone
-        lv_style_set_layout(&style_icon_btn, LV_LAYOUT_FLEX);
-        lv_style_set_flex_flow(&style_icon_btn, LV_FLEX_FLOW_ROW);
-        lv_style_set_flex_main_place(&style_icon_btn, LV_FLEX_ALIGN_CENTER);
-        lv_style_set_flex_cross_place(&style_icon_btn, LV_FLEX_ALIGN_CENTER);
-        lv_style_set_pad_all(&style_icon_btn, 8);
+        // Sem borda
+        lv_style_set_border_width(&style_icon_btn, 0);
+
+        // Layout interno: NENHUM (usaremos posicionamento absoluto/center para o label)
+        // Isso evita problemas de alinhamento do flex com fontes de ícones
+        lv_style_set_layout(&style_icon_btn, 0);
+        lv_style_set_pad_all(&style_icon_btn, 0);
         
         style_icon_init = true;
     }
     
-    // Estilo para fileira de ícones (3 por fileira)
+    // Estilo para fileira de ícones
     static lv_style_t style_row;
     static bool style_row_init = false;
     if (!style_row_init) {
         lv_style_init(&style_row);
         lv_style_set_width(&style_row, LV_PCT(100));
-        lv_style_set_pad_hor(&style_row, 2); // Padding horizontal reduzido
-        lv_style_set_pad_ver(&style_row, 0); // Sem padding vertical
-        lv_style_set_margin_top(&style_row, 0); // Sem margem superior
-        lv_style_set_margin_bottom(&style_row, 0); // Sem margem inferior
+        lv_style_set_pad_all(&style_row, 0);
+        // Adicionar padding inferior grande para acomodar a sombra dos botões sem cortar
+        lv_style_set_pad_bottom(&style_row, 10); 
+        lv_style_set_pad_top(&style_row, 2); // Pequeno padding superior por segurança
+        lv_style_set_margin_all(&style_row, 0);
+        // Gap horizontal entre botões na linha
+        lv_style_set_pad_gap(&style_row, 20); 
         style_row_init = true;
     }
 
-    // Helper lambda para criar botão de ícone (apenas ícone, sem texto)
+    // Helper lambda para criar botão de ícone
     auto create_icon_btn = [&](lv_obj_t *parent, const char* icon, lv_color_t icon_color, lv_event_cb_t cb) {
         lv_obj_t *btn = lv_button_create(parent);
-        // Remover todos os estilos padrão primeiro para evitar cores indesejadas
         lv_obj_remove_style_all(btn);
-        // Adicionar nosso estilo customizado
         lv_obj_add_style(btn, &style_icon_btn, 0);
-        lv_obj_set_size(btn, 80, 60);
-        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         
-        // Garantir que estados padrão não tenham cores indesejadas
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF5F5F5), LV_STATE_DEFAULT); // Cinza claro padrão
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0xE0E0E0), LV_STATE_PRESSED); // Mais escuro ao clicar
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF5F5F5), LV_STATE_FOCUSED); // Mesma cor quando focado
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF5F5F5), LV_STATE_FOCUS_KEY); // Mesma cor quando focado por teclado
+        // Cores de estado
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xFFFFFF), LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF0F0F0), LV_STATE_PRESSED);
+        // Efeito de clique: deslocar levemente para baixo (simula pressionar)
         lv_obj_set_style_translate_y(btn, 2, LV_STATE_PRESSED);
+        lv_obj_set_style_shadow_offset_y(btn, 1, LV_STATE_PRESSED); // Sombra diminui ao pressionar
 
-        // Apenas ícone (sem texto)
+        // Ícone
         lv_obj_t *lbl_icon = lv_label_create(btn);
         lv_label_set_text(lbl_icon, icon);
-        lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_20, 0); // Ícone tamanho padrão
+        lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_align(lbl_icon, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(lbl_icon, icon_color, 0);
+        // Centralizar perfeitamente o label dentro do botão
         lv_obj_center(lbl_icon);
 
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
@@ -924,13 +927,9 @@ void create_configuration_screen() {
     lv_obj_add_style(row1, &style_row, 0);
     lv_obj_set_layout(row1, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(row1, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row1, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_margin_top(row1, 0, 0); // Garantir sem margem superior
-    lv_obj_set_style_margin_bottom(row1, 0, 0); // Garantir sem margem inferior
-    lv_obj_set_style_pad_all(row1, 0, 0); // Remover todo padding interno da fileira
-    lv_obj_set_style_pad_row(row1, 0, 0); // Remover gap de linha
-    lv_obj_set_style_pad_column(row1, 0, 0); // Remover gap de coluna (já controlado pelo space_evenly)
-    lv_obj_set_height(row1, LV_SIZE_CONTENT); // Altura baseada apenas nos ícones
+    // Centralizar itens na linha
+    lv_obj_set_flex_align(row1, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_height(row1, LV_SIZE_CONTENT);
     
     // Botão WiFi
     create_icon_btn(row1, LV_SYMBOL_WIFI, ::ui::common::COLOR_BUTTON_BLUE(), [](lv_event_t *e) {
@@ -957,19 +956,15 @@ void create_configuration_screen() {
     // Botão Calibração
     create_icon_btn(row1, LV_SYMBOL_SETTINGS, ::ui::common::COLOR_SETTINGS_BUTTON(), config_calibrate_button_cb);
     
-    // Segunda fileira (3 ícones)
+    // Segunda fileira (2 ícones)
     lv_obj_t *row2 = lv_obj_create(icons_cont);
     lv_obj_remove_style_all(row2);
     lv_obj_add_style(row2, &style_row, 0);
     lv_obj_set_layout(row2, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(row2, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row2, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_margin_top(row2, 0, 0); // Garantir sem margem superior
-    lv_obj_set_style_margin_bottom(row2, 0, 0); // Garantir sem margem inferior
-    lv_obj_set_style_pad_all(row2, 0, 0); // Remover todo padding interno da fileira
-    lv_obj_set_style_pad_row(row2, 0, 0); // Remover gap de linha
-    lv_obj_set_style_pad_column(row2, 0, 0); // Remover gap de coluna
-    lv_obj_set_height(row2, LV_SIZE_CONTENT); // Altura baseada apenas nos ícones
+    // Centralizar itens na linha
+    lv_obj_set_flex_align(row2, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_height(row2, LV_SIZE_CONTENT);
     
     // Botão OTA Update
     create_icon_btn(row2, LV_SYMBOL_REFRESH, ::ui::common::COLOR_SUCCESS(), [](lv_event_t *e) {
@@ -992,14 +987,8 @@ void create_configuration_screen() {
         }
     });
     
-    // Espaço reservado para futuro ícone (pode adicionar mais depois)
-
-    // Botão de voltar fixo na parte inferior da tela (não dentro do flex container)
-    lv_obj_t *back_button = ::ui::common::create_button(configuration_screen, "Voltar", 150, ::ui::common::COLOR_ERROR());
-    lv_obj_set_style_radius(back_button, 20, 0); // Radius maior como no design original
-    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -::ui::common::SCREEN_PADDING); // Fixo na parte inferior
-    
-    lv_obj_add_event_cb(back_button, config_back_button_cb, LV_EVENT_CLICKED, nullptr);
+    // Botão de voltar usando função unificada
+    ::ui::common::create_back_button(configuration_screen, config_back_button_cb);
 }
 
 void show_configuration_screen() {

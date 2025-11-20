@@ -73,12 +73,89 @@ lv_obj_t* create_button(lv_obj_t* parent, const char* text, int32_t width, lv_co
     return button;
 }
 
-lv_obj_t* create_back_button(lv_obj_t* parent, lv_event_cb_t event_cb) {
-    // Botão Voltar padrão: Cinza, largura razoável, alinhado ao fundo
-    lv_obj_t* back_button = create_button(parent, "Voltar", 120, COLOR_BUTTON_GRAY());
+// Constantes padronizadas para botões
+namespace {
+    // Botões padrão (Voltar, Conectar, OK principal, etc.)
+    constexpr int32_t STANDARD_BUTTON_WIDTH = 120;  // Largura padrão unificada
+    constexpr int32_t STANDARD_BUTTON_HEIGHT = BUTTON_HEIGHT; // Altura padrão (38px)
+    constexpr int32_t STANDARD_BUTTON_RADIUS = 18;   // Raio padrão unificado (arredondado)
+    constexpr int32_t STANDARD_BUTTON_BOTTOM_OFFSET = 10; // Distância padrão da base (10px)
     
-    // Alinhamento padrão para botão voltar único: Bottom Middle
-    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -SCREEN_PADDING);
+    // Botões compactos (para casos especiais como input_screen)
+    constexpr int32_t COMPACT_BUTTON_WIDTH = 80;   // Largura compacta
+    constexpr int32_t COMPACT_BUTTON_HEIGHT = 32;  // Altura compacta (mantém proporção)
+    constexpr int32_t COMPACT_BUTTON_RADIUS = 16;  // Raio proporcionalmente menor
+}
+
+// Função auxiliar para aplicar estilo padrão de botão (raio, etc.)
+void apply_standard_button_style(lv_obj_t* button, int32_t radius) {
+    lv_obj_set_style_radius(button, radius, 0);
+}
+
+// Botão de ação principal (Conectar, OK principal, Confirmar, etc.)
+lv_obj_t* create_action_button(lv_obj_t* parent, const char* text, lv_color_t color, lv_event_cb_t event_cb) {
+    lv_obj_t* button = create_button(parent, text, STANDARD_BUTTON_WIDTH, color, STANDARD_BUTTON_HEIGHT);
+    apply_standard_button_style(button, STANDARD_BUTTON_RADIUS);
+    
+    if (event_cb) {
+        lv_obj_add_event_cb(button, event_cb, LV_EVENT_CLICKED, nullptr);
+    }
+    
+    return button;
+}
+
+// Botão de ação principal com offset X customizado (para dois botões lado a lado)
+lv_obj_t* create_action_button(lv_obj_t* parent, const char* text, lv_color_t color, lv_event_cb_t event_cb, int32_t offset_x) {
+    lv_obj_t* button = create_button(parent, text, STANDARD_BUTTON_WIDTH, color, STANDARD_BUTTON_HEIGHT);
+    apply_standard_button_style(button, STANDARD_BUTTON_RADIUS);
+    lv_obj_align(button, LV_ALIGN_BOTTOM_MID, offset_x, -STANDARD_BUTTON_BOTTOM_OFFSET);
+    
+    if (event_cb) {
+        lv_obj_add_event_cb(button, event_cb, LV_EVENT_CLICKED, nullptr);
+    }
+    
+    return button;
+}
+
+// Botão compacto (para casos especiais como input_screen, dialogs pequenos)
+lv_obj_t* create_compact_button(lv_obj_t* parent, const char* text, lv_color_t color, lv_event_cb_t event_cb) {
+    lv_obj_t* button = create_button(parent, text, COMPACT_BUTTON_WIDTH, color, COMPACT_BUTTON_HEIGHT);
+    apply_standard_button_style(button, COMPACT_BUTTON_RADIUS);
+    
+    if (event_cb) {
+        lv_obj_add_event_cb(button, event_cb, LV_EVENT_CLICKED, nullptr);
+    }
+    
+    return button;
+}
+
+lv_obj_t* create_back_button(lv_obj_t* parent, lv_event_cb_t event_cb) {
+    // Botão Voltar PADRONIZADO: Tamanho, cor, raio e posição consistentes em todas as telas
+    lv_obj_t* back_button = create_button(parent, "Voltar", STANDARD_BUTTON_WIDTH, COLOR_BUTTON_GRAY(), STANDARD_BUTTON_HEIGHT);
+    
+    // Raio padronizado (mais arredondado que botões normais)
+    apply_standard_button_style(back_button, STANDARD_BUTTON_RADIUS);
+    
+    // Alinhamento padrão: Bottom Middle com offset consistente
+    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -STANDARD_BUTTON_BOTTOM_OFFSET);
+    
+    if (event_cb) {
+        lv_obj_add_event_cb(back_button, event_cb, LV_EVENT_CLICKED, nullptr);
+    }
+    
+    return back_button;
+}
+
+// Versão com offset X customizado (para casos especiais como dois botões lado a lado)
+lv_obj_t* create_back_button(lv_obj_t* parent, lv_event_cb_t event_cb, int32_t offset_x) {
+    // Botão Voltar com tamanho e estilo padronizados, mas com offset X customizado
+    lv_obj_t* back_button = create_button(parent, "Voltar", STANDARD_BUTTON_WIDTH, COLOR_BUTTON_GRAY(), STANDARD_BUTTON_HEIGHT);
+    
+    // Raio padronizado
+    apply_standard_button_style(back_button, STANDARD_BUTTON_RADIUS);
+    
+    // Alinhamento com offset X customizado
+    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, offset_x, -STANDARD_BUTTON_BOTTOM_OFFSET);
     
     if (event_cb) {
         lv_obj_add_event_cb(back_button, event_cb, LV_EVENT_CLICKED, nullptr);

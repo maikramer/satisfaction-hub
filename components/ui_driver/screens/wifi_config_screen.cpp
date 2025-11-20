@@ -147,7 +147,7 @@ void create_wifi_config_screen() {
     common::apply_screen_style(wifi_screen);
     
     // Título usando helper
-    lv_obj_t* title_label = common::create_screen_title(wifi_screen, "Configurar WiFi");
+    common::create_screen_title(wifi_screen, "Configurar WiFi");
     
     // Layout Y de referência
     int32_t current_y = common::HEADER_HEIGHT + 10;
@@ -235,8 +235,8 @@ void create_wifi_config_screen() {
         }
     }, LV_EVENT_CLICKED, nullptr);
     
-    // Próxima linha (status)
-    current_y += common::INPUT_HEIGHT + 20;
+    // Próxima linha (status) - reduzir 20px para evitar corte do texto
+    current_y += common::INPUT_HEIGHT; // Subir 20px em relação ao cálculo anterior
     
     // Status label
     status_label = lv_label_create(wifi_screen);
@@ -254,16 +254,12 @@ void create_wifi_config_screen() {
         lv_obj_set_style_text_color(status_label, common::COLOR_SUCCESS(), 0);
     }
     
-    // Botões na parte inferior
-    // Conectar
-    connect_button = common::create_button(wifi_screen, "Conectar", 140, common::COLOR_BUTTON_BLUE());
-    lv_obj_align(connect_button, LV_ALIGN_BOTTOM_MID, -75, -common::SCREEN_PADDING); // Esquerda do centro
-    lv_obj_add_event_cb(connect_button, connect_button_cb, LV_EVENT_CLICKED, nullptr);
+    // Botões na parte inferior - usando funções padronizadas
+    // Conectar - botão de ação principal com offset X para ficar à esquerda
+    connect_button = common::create_action_button(wifi_screen, "Conectar", common::COLOR_BUTTON_BLUE(), connect_button_cb, -75);
     
-    // Voltar
-    back_button = common::create_button(wifi_screen, "Voltar", 140, common::COLOR_BUTTON_GRAY());
-    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 75, -common::SCREEN_PADDING); // Direita do centro
-    lv_obj_add_event_cb(back_button, back_button_cb, LV_EVENT_CLICKED, nullptr);
+    // Voltar - usando função unificada com offset X para ficar à direita (caso especial: dois botões)
+    back_button = common::create_back_button(wifi_screen, back_button_cb, 75);
     
     ESP_LOGI(TAG, "create_wifi_config_screen() concluído");
 }
