@@ -4,6 +4,8 @@
 #include "screens/wifi_config_screen.hpp"
 #include "screens/brightness_screen.hpp"
 #include "screens/password_screen.hpp"
+#include "screens/ota_screen.hpp"
+#include "screens/about_screen.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -93,6 +95,8 @@ enum class AppState {
     CONFIGURATION, // Tela de configurações
     WIFI_CONFIG,   // Tela de configuração WiFi
     BRIGHTNESS_CONFIG, // Tela de configuração de brilho
+    OTA_UPDATE,    // Tela de atualização OTA
+    ABOUT,         // Tela "Sobre"
 };
 
 AppState current_state = AppState::CALIBRATION;
@@ -807,98 +811,131 @@ void create_configuration_screen() {
     lv_obj_remove_style_all(main_cont);
     lv_obj_set_size(main_cont, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(main_cont, LV_FLEX_FLOW_COLUMN);
+    // Alinhamento: START verticalmente (topo), CENTER horizontalmente (centro)
     lv_obj_set_flex_align(main_cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(main_cont, 10, 0);
-    lv_obj_set_style_pad_row(main_cont, 10, 0);
+    lv_obj_set_style_pad_all(main_cont, 4, 0); // Padding reduzido para compactar
+    lv_obj_set_style_pad_row(main_cont, 4, 0); // Espaçamento reduzido entre elementos
 
     // Título usando helper (mas dentro do container flex)
     lv_obj_t *title_label = lv_label_create(main_cont);
     lv_label_set_text(title_label, "Configurações");
+    lv_obj_set_width(title_label, LV_PCT(100)); // Garantir largura total para centralização do texto
     lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(title_label, ::ui::common::COLOR_TEXT_BLACK(), 0);
     lv_obj_set_style_text_font(title_label, ::ui::common::TITLE_FONT, 0);
-    lv_obj_set_style_pad_top(title_label, 5, 0);
+    lv_obj_set_style_pad_bottom(title_label, 4, 0); // Espaço reduzido abaixo do título
+    lv_obj_set_height(title_label, LV_SIZE_CONTENT); // Altura baseada no conteúdo
     
-    // Container para os ícones (Grid horizontal)
+    // Container para os ícones (2 fileiras de 3 ícones)
     lv_obj_t *icons_cont = lv_obj_create(main_cont);
     lv_obj_remove_style_all(icons_cont);
     lv_obj_set_width(icons_cont, LV_PCT(100));
-    lv_obj_set_flex_grow(icons_cont, 1); // Ocupar espaço disponível verticalmente
-    lv_obj_set_flex_flow(icons_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(icons_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(icons_cont, 5, 0);
+    // Altura automática mas com flex grow para ocupar espaço vertical disponível
+    lv_obj_set_height(icons_cont, LV_SIZE_CONTENT); 
+    lv_obj_set_flex_flow(icons_cont, LV_FLEX_FLOW_COLUMN); // Fileiras verticais
+    // Alinhamento: CENTER verticalmente e horizontalmente
+    lv_obj_set_flex_align(icons_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(icons_cont, 0, 0); // Sem padding interno
+    lv_obj_set_style_pad_row(icons_cont, 8, 0); // Espaçamento de 4px entre fileiras
+    lv_obj_set_style_pad_gap(icons_cont, 8, 0); // Gap adicional de 4px
+    lv_obj_set_style_flex_grow(icons_cont, 1, 0); // Expandir para ocupar espaço disponível
+    // Adicionar padding inferior para reservar espaço para o botão voltar (que está fixo)
+    // Altura botão (38) + padding tela (4) + margem segurança (~8) = ~50px
+    lv_obj_set_style_pad_bottom(icons_cont, 50, 0);
 
-    // Estilo para botões de ícone (cards quadrados)
+    // Estilo para botões de ícone (apenas ícone, sem texto)
     static lv_style_t style_icon_btn;
     static bool style_icon_init = false;
     if (!style_icon_init) {
         lv_style_init(&style_icon_btn);
-        lv_style_set_width(&style_icon_btn, 85); // Cabem 3 em 320px com espaço (85*3 = 255)
-        lv_style_set_height(&style_icon_btn, 85);
-        lv_style_set_bg_color(&style_icon_btn, lv_color_white());
+        // Tamanho menor para caber 3 por fileira: (320 - padding*2 - gap*2) / 3 ≈ 90px
+        lv_style_set_width(&style_icon_btn, 80); // Reduzido levemente
+        lv_style_set_height(&style_icon_btn, 60); // Mais compacto verticalmente
+        lv_style_set_bg_color(&style_icon_btn, lv_color_hex(0xF5F5F5)); // Fundo cinza claro para contraste
         lv_style_set_bg_opa(&style_icon_btn, LV_OPA_COVER);
-        lv_style_set_radius(&style_icon_btn, 12);
-        lv_style_set_shadow_width(&style_icon_btn, 15);
-        lv_style_set_shadow_color(&style_icon_btn, lv_color_hex(0x000000));
-        lv_style_set_shadow_opa(&style_icon_btn, 20); // Suave
-        lv_style_set_shadow_offset_y(&style_icon_btn, 4);
+        lv_style_set_radius(&style_icon_btn, 10);
         
-        // Layout interno: Flex Column (Ícone em cima, Texto embaixo)
+        // Borda sutil para definição
+        lv_style_set_border_width(&style_icon_btn, 1);
+        lv_style_set_border_color(&style_icon_btn, lv_color_hex(0xE0E0E0));
+        lv_style_set_border_opa(&style_icon_btn, LV_OPA_COVER);
+
+        lv_style_set_shadow_width(&style_icon_btn, 10);
+        lv_style_set_shadow_color(&style_icon_btn, lv_color_hex(0x000000));
+        lv_style_set_shadow_opa(&style_icon_btn, 15);
+        lv_style_set_shadow_offset_y(&style_icon_btn, 3);
+        
+        // Layout interno: apenas centralizar ícone
         lv_style_set_layout(&style_icon_btn, LV_LAYOUT_FLEX);
-        lv_style_set_flex_flow(&style_icon_btn, LV_FLEX_FLOW_COLUMN);
+        lv_style_set_flex_flow(&style_icon_btn, LV_FLEX_FLOW_ROW);
         lv_style_set_flex_main_place(&style_icon_btn, LV_FLEX_ALIGN_CENTER);
         lv_style_set_flex_cross_place(&style_icon_btn, LV_FLEX_ALIGN_CENTER);
-        lv_style_set_pad_all(&style_icon_btn, 5);
-        lv_style_set_pad_row(&style_icon_btn, 5);
+        lv_style_set_pad_all(&style_icon_btn, 8);
         
         style_icon_init = true;
     }
+    
+    // Estilo para fileira de ícones (3 por fileira)
+    static lv_style_t style_row;
+    static bool style_row_init = false;
+    if (!style_row_init) {
+        lv_style_init(&style_row);
+        lv_style_set_width(&style_row, LV_PCT(100));
+        lv_style_set_pad_hor(&style_row, 2); // Padding horizontal reduzido
+        lv_style_set_pad_ver(&style_row, 0); // Sem padding vertical
+        lv_style_set_margin_top(&style_row, 0); // Sem margem superior
+        lv_style_set_margin_bottom(&style_row, 0); // Sem margem inferior
+        style_row_init = true;
+    }
 
-    // Helper lambda para criar botão de ícone
-    auto create_icon_btn = [&](lv_obj_t *parent, const char* icon, const char* text, lv_color_t icon_color, lv_event_cb_t cb) {
+    // Helper lambda para criar botão de ícone (apenas ícone, sem texto)
+    auto create_icon_btn = [&](lv_obj_t *parent, const char* icon, lv_color_t icon_color, lv_event_cb_t cb) {
         lv_obj_t *btn = lv_button_create(parent);
+        // Remover todos os estilos padrão primeiro para evitar cores indesejadas
+        lv_obj_remove_style_all(btn);
+        // Adicionar nosso estilo customizado
         lv_obj_add_style(btn, &style_icon_btn, 0);
-        lv_obj_set_style_pad_all(btn, 8, 0);
-        lv_obj_set_style_pad_row(btn, 6, 0);
-        lv_obj_set_size(btn, 85, 85);
-        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(btn,
-                              LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_size(btn, 80, 60);
+        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         
-        // Efeito de clique
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF0F0F0), LV_STATE_PRESSED);
-        // Leve deslocamento ao clicar para efeito tátil
+        // Garantir que estados padrão não tenham cores indesejadas
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF5F5F5), LV_STATE_DEFAULT); // Cinza claro padrão
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xE0E0E0), LV_STATE_PRESSED); // Mais escuro ao clicar
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF5F5F5), LV_STATE_FOCUSED); // Mesma cor quando focado
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xF5F5F5), LV_STATE_FOCUS_KEY); // Mesma cor quando focado por teclado
         lv_obj_set_style_translate_y(btn, 2, LV_STATE_PRESSED);
 
-        // Ícone grande
+        // Apenas ícone (sem texto)
         lv_obj_t *lbl_icon = lv_label_create(btn);
-        lv_obj_set_width(lbl_icon, LV_PCT(100));
         lv_label_set_text(lbl_icon, icon);
-        lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_20, 0); // Se tiver 24 ou 28 seria melhor, mas 20 ok
+        lv_obj_set_style_text_font(lbl_icon, &lv_font_montserrat_20, 0); // Ícone tamanho padrão
         lv_obj_set_style_text_align(lbl_icon, LV_TEXT_ALIGN_CENTER, 0);
-        // Escalar o ícone se possível ou apenas mudar cor
         lv_obj_set_style_text_color(lbl_icon, icon_color, 0);
-
-        // Texto
-        lv_obj_t *lbl_text = lv_label_create(btn);
-        lv_obj_set_width(lbl_text, LV_PCT(100));
-        lv_label_set_text(lbl_text, text);
-        lv_obj_set_style_text_font(lbl_text, ::ui::common::TEXT_FONT, 0);
-        lv_obj_set_style_text_color(lbl_text, ::ui::common::COLOR_TEXT_GRAY(), 0);
-        lv_obj_set_style_text_align(lbl_text, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(lbl_icon);
 
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
         return btn;
     };
 
+    // Primeira fileira (3 ícones)
+    lv_obj_t *row1 = lv_obj_create(icons_cont);
+    lv_obj_remove_style_all(row1);
+    lv_obj_add_style(row1, &style_row, 0);
+    lv_obj_set_layout(row1, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row1, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row1, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_margin_top(row1, 0, 0); // Garantir sem margem superior
+    lv_obj_set_style_margin_bottom(row1, 0, 0); // Garantir sem margem inferior
+    lv_obj_set_style_pad_all(row1, 0, 0); // Remover todo padding interno da fileira
+    lv_obj_set_style_pad_row(row1, 0, 0); // Remover gap de linha
+    lv_obj_set_style_pad_column(row1, 0, 0); // Remover gap de coluna (já controlado pelo space_evenly)
+    lv_obj_set_height(row1, LV_SIZE_CONTENT); // Altura baseada apenas nos ícones
+    
     // Botão WiFi
-    create_icon_btn(icons_cont, LV_SYMBOL_WIFI, "WiFi", ::ui::common::COLOR_BUTTON_BLUE(), [](lv_event_t *e) {
+    create_icon_btn(row1, LV_SYMBOL_WIFI, ::ui::common::COLOR_BUTTON_BLUE(), [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-            // Resetar timeout ao interagir
             reset_config_timeout();
-            
             ESP_LOGI(TAG, "Abrindo configuração WiFi...");
             current_state = AppState::WIFI_CONFIG;
             ::ui::screens::on_back_callback = show_configuration_screen;
@@ -907,11 +944,9 @@ void create_configuration_screen() {
     });
     
     // Botão Brilho
-    create_icon_btn(icons_cont, LV_SYMBOL_EYE_OPEN, "Brilho", ::ui::common::COLOR_WARNING(), [](lv_event_t *e) {
+    create_icon_btn(row1, LV_SYMBOL_EYE_OPEN, ::ui::common::COLOR_WARNING(), [](lv_event_t *e) {
         if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-            // Resetar timeout ao interagir
             reset_config_timeout();
-            
             ESP_LOGI(TAG, "Abrindo configuração de brilho...");
             current_state = AppState::BRIGHTNESS_CONFIG;
             ::ui::screens::brightness_on_back_callback = show_configuration_screen;
@@ -920,12 +955,49 @@ void create_configuration_screen() {
     });
     
     // Botão Calibração
-    create_icon_btn(icons_cont, LV_SYMBOL_SETTINGS, "Calibrar", ::ui::common::COLOR_SETTINGS_BUTTON(), config_calibrate_button_cb);
+    create_icon_btn(row1, LV_SYMBOL_SETTINGS, ::ui::common::COLOR_SETTINGS_BUTTON(), config_calibrate_button_cb);
+    
+    // Segunda fileira (3 ícones)
+    lv_obj_t *row2 = lv_obj_create(icons_cont);
+    lv_obj_remove_style_all(row2);
+    lv_obj_add_style(row2, &style_row, 0);
+    lv_obj_set_layout(row2, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row2, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row2, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_margin_top(row2, 0, 0); // Garantir sem margem superior
+    lv_obj_set_style_margin_bottom(row2, 0, 0); // Garantir sem margem inferior
+    lv_obj_set_style_pad_all(row2, 0, 0); // Remover todo padding interno da fileira
+    lv_obj_set_style_pad_row(row2, 0, 0); // Remover gap de linha
+    lv_obj_set_style_pad_column(row2, 0, 0); // Remover gap de coluna
+    lv_obj_set_height(row2, LV_SIZE_CONTENT); // Altura baseada apenas nos ícones
+    
+    // Botão OTA Update
+    create_icon_btn(row2, LV_SYMBOL_REFRESH, ::ui::common::COLOR_SUCCESS(), [](lv_event_t *e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            reset_config_timeout();
+            ESP_LOGI(TAG, "Abrindo tela de atualização OTA...");
+            current_state = AppState::OTA_UPDATE;
+            ::ui::screens::show_ota_screen(nullptr);
+        }
+    });
+    
+    // Botão Sobre
+    create_icon_btn(row2, LV_SYMBOL_FILE, ::ui::common::COLOR_BUTTON_BLUE(), [](lv_event_t *e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            reset_config_timeout();
+            ESP_LOGI(TAG, "Abrindo tela Sobre...");
+            current_state = AppState::ABOUT;
+            ::ui::screens::about_on_back_callback = show_configuration_screen;
+            ::ui::screens::show_about_screen();
+        }
+    });
+    
+    // Espaço reservado para futuro ícone (pode adicionar mais depois)
 
-    // Botão de voltar usando helper
-    // Mas como estamos num flex container, precisamos usar create_button e não create_back_button (que usa align)
-    lv_obj_t *back_button = ::ui::common::create_button(main_cont, "Voltar", 150, ::ui::common::COLOR_ERROR());
+    // Botão de voltar fixo na parte inferior da tela (não dentro do flex container)
+    lv_obj_t *back_button = ::ui::common::create_button(configuration_screen, "Voltar", 150, ::ui::common::COLOR_ERROR());
     lv_obj_set_style_radius(back_button, 20, 0); // Radius maior como no design original
+    lv_obj_align(back_button, LV_ALIGN_BOTTOM_MID, 0, -::ui::common::SCREEN_PADDING); // Fixo na parte inferior
     
     lv_obj_add_event_cb(back_button, config_back_button_cb, LV_EVENT_CLICKED, nullptr);
 }

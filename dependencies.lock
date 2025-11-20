@@ -1,8 +1,8 @@
 dependencies:
   Connection:
     dependencies:
-    - name: utility
-      path: ../utility
+    - name: Utility
+      path: ../Utility
     - name: JsonModels
       path: ../JsonModels
     source:
@@ -11,8 +11,8 @@ dependencies:
     version: 1.0.0
   ErrorCodes:
     dependencies:
-    - name: utility
-      path: ../utility
+    - name: Utility
+      path: ../Utility
     source:
       path: /home/maikeu/Embedded/ESP32/esp_components/ErrorCodes
       type: local
@@ -21,8 +21,8 @@ dependencies:
     dependencies:
     - name: johboh/nlohmann-json
       version: ^3.12.0
-    - name: utility
-      path: ../utility
+    - name: Utility
+      path: ../Utility
     - name: ErrorCodes
       path: ../ErrorCodes
     source:
@@ -31,18 +31,26 @@ dependencies:
     version: 1.0.0
   Storage:
     dependencies:
-    - name: utility
-      path: ../utility
+    - name: Utility
+      path: ../Utility
     - name: JsonModels
       path: ../JsonModels
     source:
       path: /home/maikeu/Embedded/ESP32/esp_components/Storage
       type: local
     version: 1.0.0
+  Utility:
+    dependencies:
+    - name: johboh/nlohmann-json
+      version: ^3.12.0
+    source:
+      path: /home/maikeu/Embedded/ESP32/esp_components/Utility
+      type: local
+    version: 1.0.0
   Wifi:
     dependencies:
-    - name: utility
-      path: ../utility
+    - name: Utility
+      path: ../Utility
     - name: Connection
       path: ../Connection
     - name: ErrorCodes
@@ -96,14 +104,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.4.0
-  utility:
-    dependencies:
-    - name: johboh/nlohmann-json
-      version: ^3.12.0
-    source:
-      path: /home/maikeu/Embedded/ESP32/esp_components/utility
-      type: local
-    version: 1.0.0
 direct_dependencies:
 - Storage
 - Wifi

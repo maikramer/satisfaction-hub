@@ -125,11 +125,11 @@ esp_err_t SupabaseDriver::set_credentials(const char* url, const char* api_key, 
         return ESP_FAIL;
     }
     
-    configured_ = true;
+        configured_ = true;
     ESP_LOGI(TAG, "Credenciais salvas no Storage com sucesso");
-    ESP_LOGI(TAG, "URL: %s", config_.url);
-    ESP_LOGI(TAG, "Tabela: %s", config_.table_name);
-    // Não logar a API key por segurança
+        ESP_LOGI(TAG, "URL: %s", config_.url);
+        ESP_LOGI(TAG, "Tabela: %s", config_.table_name);
+        // Não logar a API key por segurança
     
     return ESP_OK;
 }

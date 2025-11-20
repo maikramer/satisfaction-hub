@@ -16,7 +16,7 @@ extern const lv_font_t *CAPTION_FONT;
 // Constantes de Layout
 constexpr int32_t SCREEN_WIDTH = 320;
 constexpr int32_t SCREEN_HEIGHT = 240;
-constexpr int32_t SCREEN_PADDING = 10;
+constexpr int32_t SCREEN_PADDING = 4; // Padding padrão reduzido para compactar
 constexpr int32_t HEADER_HEIGHT = 40;
 constexpr int32_t BUTTON_HEIGHT = 38;
 constexpr int32_t BUTTON_RADIUS = 8;
