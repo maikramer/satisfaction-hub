@@ -1,2 +1,48 @@
 CompileFlags:
-    Remove: [-f*, -m*]
+  # Usar compile_commands.json do diretório build
+  CompilationDatabase: build
+  
+  # Remover flags específicas do GCC/xtensa que o clang não entende
+  Remove:
+    - -mno-target-align
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -mlongcalls
+    - -Wno-frame-address
+    - -fno-builtin-memcpy
+    - -fno-builtin-memset
+    - -fno-builtin-bzero
+    - -freorder-blocks
+    - -fzero-init-padding-bits=all
+    - -fno-malloc-dce
+    - -fno-jump-tables
+    - -gdwarf-4
+    - -ggdb
+    - -Os
+    - -ffunction-sections
+    - -fdata-sections
+    - -fmacro-prefix-map=*
+  
+  # Adicionar flags para ignorar erros conhecidos
+  Add:
+    - -Wno-unknown-argument
+    - -Wno-unused-command-line-argument
+    - -I/home/maikeu/esp/v6.0/esp-idf/components/esp_libc/platform_include
+    - -I/home/maikeu/esp/v6.0/esp-idf/components/newlib/platform_include
+    - -D__XTENSA__
+
+Diagnostics:
+  # Ignorar erros de flags desconhecidas
+  UnusedIncludes: None
+  MissingIncludes: None
+  
+  # Suprimir erros específicos
+  Suppress:
+    - drv_unknown_argument
+    - pp_file_not_found
+    - typename_nested_not_found
+    - no_member_template
+    - no_member
+
+Index:
+  Background: Build
